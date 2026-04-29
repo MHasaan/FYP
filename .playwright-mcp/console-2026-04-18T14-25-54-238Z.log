@@ -1,0 +1,4 @@
+[  355907ms] [LOG] Feed WebSocket closed @ http://localhost/main.dart.js:29585
+[  355908ms] [LOG] Results WebSocket closed @ http://localhost/main.dart.js:29585
+[  356191ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:8000/alerts/:0
+[  356533ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:8000/recordings/:0

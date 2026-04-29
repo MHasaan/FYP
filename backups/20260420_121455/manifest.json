@@ -1,0 +1,8 @@
+﻿{
+    "created_at_utc":  "2026-04-20T07:14:58.5972758Z",
+    "project_root":  "D:\\FYP\\project",
+    "database_dump":  true,
+    "recordings_zip":  true,
+    "models_zip":  true,
+    "env_file":  true
+}

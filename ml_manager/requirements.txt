@@ -1,0 +1,21 @@
+# Core
+redis==5.1.0
+numpy>=1.24.0,<2.0.0
+opencv-python-headless>=4.8.0,<4.10.0
+
+# ML Frameworks
+# Using --extra-index-url for torch is safer in some environments
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch>=2.1.0
+torchvision>=0.16.0
+ultralytics>=8.0.0
+timm>=0.9.0
+
+# Pose Estimation (RTMPose)
+rtmlib>=0.0.10
+onnxruntime-gpu==1.17.1
+scipy>=1.10.0
+
+# Utilities
+Pillow>=10.0.0
+pyyaml>=6.0

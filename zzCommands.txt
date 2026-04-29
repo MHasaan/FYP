@@ -1,0 +1,18 @@
+# First-time setup (builds everything)
+.\commandScripts\setup.bat
+
+# Start the project
+.\commandScripts\start.bat
+
+# Stop the project
+.\commandScripts\stop.bat
+
+# Rebuild with code changes (all containers)
+.\commandScripts\start.bat rebuild
+
+# Rebuild specific containers (e.g. only frontend, or multiple)
+.\commandScripts\start.bat rebuild frontend
+.\commandScripts\start.bat rebuild backend ml_manager
+
+# Stop and delete all data
+.\commandScripts\stop.bat clean
