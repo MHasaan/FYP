@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # ============================================
 # ML Manager - NVIDIA CUDA Base Image
 # ============================================
@@ -11,6 +10,10 @@ FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 # Force unbuffered Python output for Docker logs
 ENV PYTHONUNBUFFERED=1
+# Make pip more resilient on unstable networks during large wheel downloads
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=20
 
 WORKDIR /app
 
@@ -42,10 +45,10 @@ COPY requirements.txt .
 # 2. Explicitly remove any onnxruntime (CPU) to avoid conflicts
 # 3. Force reinstall onnxruntime-gpu to ensure a clean state
 # 4. Remove any leftover __pycache__ or pyc files from the build context
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt && \
+RUN \
+    pip install --retries "${PIP_RETRIES}" --timeout "${PIP_DEFAULT_TIMEOUT}" --resume-retries "${PIP_RETRIES}" --prefer-binary -r requirements.txt && \
     pip uninstall -y onnxruntime onnxruntime-gpu && \
-    pip install onnxruntime-gpu==1.17.1 && \
+    pip install --retries "${PIP_RETRIES}" --timeout "${PIP_DEFAULT_TIMEOUT}" --resume-retries "${PIP_RETRIES}" --prefer-binary onnxruntime-gpu==1.17.1 && \
     find /app -name "__pycache__" -type d -exec rm -rf {} + && \
     find /app -name "*.pyc" -delete
 
