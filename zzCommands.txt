@@ -16,3 +16,19 @@
 
 # Stop and delete all data
 .\commandScripts\stop.bat clean
+
+# Backup database + recordings
+.\commandScripts\backup.bat
+.\commandScripts\backup.bat -IncludeModels -IncludeEnvFile
+
+# Restore from latest backup
+.\commandScripts\restore.bat
+.\commandScripts\restore.bat -RestoreModels -StartStack
+
+# Check GPU access in ML Manager
+docker compose exec ml_manager python -c "import torch; print(torch.cuda.is_available())"
+
+# View container logs
+docker compose logs -f backend
+docker compose logs -f ml_manager
+docker compose logs -f frontend

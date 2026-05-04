@@ -1,18 +1,22 @@
 @echo on
 REM =============================================================================
-REM FYP Project - Start Script (Windows)
+REM FYP Project - Start Debug Script (Windows)
 REM =============================================================================
-REM This script starts the existing project containers.
-REM Run setup.bat first if containers don't exist.
+REM Same as start.bat but with echo on for debugging.
 REM
-REM Usage: start.bat          - Start existing containers
-REM        start.bat rebuild  - Rebuild and start containers
+REM Usage: start_debug.bat          - Start existing containers
+REM        start_debug.bat rebuild  - Rebuild and start containers
+REM        start_debug.bat rebuild frontend  - Rebuild specific containers
 REM =============================================================================
 
 setlocal enabledelayedexpansion
 
 REM Navigate to project root (parent of scripts folder)
 cd /d "%~dp0.."
+
+REM Enable BuildKit for better caching
+set DOCKER_BUILDKIT=1
+set COMPOSE_DOCKER_CLI_BUILD=1
 
 set REBUILD=0
 if "%1"=="rebuild" set REBUILD=1
@@ -31,7 +35,7 @@ if not "%1"=="" (
 
 echo.
 echo ============================================================
-echo   FYP Project - Start Script
+echo   FYP Project - Start Debug Script
 echo ============================================================
 echo.
 
@@ -67,7 +71,7 @@ if %errorlevel% neq 0 (
         echo [!] No containers found.
         echo.
         echo Please run setup.bat first to build the containers.
-        echo Or run: start.bat rebuild
+        echo Or run: start_debug.bat rebuild
         echo.
         pause
         exit /b 1
@@ -76,29 +80,7 @@ if %errorlevel% neq 0 (
 
 REM Start containers
 if %REBUILD%==1 (
-    REM If rebuilding frontend (or rebuilding all), regenerate Flutter web assets first.
-    if "%SERVICES%"=="" (
-        echo [*] Building Flutter web (release)...
-        powershell -ExecutionPolicy Bypass -File build.ps1
-        if %errorlevel% neq 0 (
-            echo [ERROR] Flutter web build failed!
-            pause
-            exit /b 1
-        )
-    ) else (
-        echo %SERVICES% | findstr /i "frontend" >nul
-        if %errorlevel%==0 (
-            echo [*] Building Flutter web (release)...
-            powershell -ExecutionPolicy Bypass -File build.ps1
-            if %errorlevel% neq 0 (
-                echo [ERROR] Flutter web build failed!
-                pause
-                exit /b 1
-            )
-        )
-    )
-
-    echo [*] Rebuilding and starting containers... %SERVICES%
+    echo [*] Rebuilding and starting containers (uses cached layers)... %SERVICES%
     docker compose up -d --build %SERVICES%
 ) else (
     echo [*] Starting existing containers... %SERVICES%
@@ -107,6 +89,9 @@ if %REBUILD%==1 (
 
 if %errorlevel% neq 0 (
     echo [ERROR] Failed to start containers!
+    echo.
+    echo Tip: If you got a timeout, just run this command again.
+    echo Docker caches everything that succeeded, so retries are fast.
     pause
     exit /b 1
 )
@@ -122,7 +107,7 @@ docker compose ps
 
 echo.
 echo ============================================================
-echo   Project Started!
+echo   Project Started! (Debug Mode)
 echo ============================================================
 echo.
 echo   Web App:     http://localhost
@@ -130,7 +115,7 @@ echo   API Docs:    http://localhost:8000/docs
 echo   API Health:  http://localhost:8000/health
 echo.
 echo   To view logs:  docker compose logs -f
-echo   To stop:       docker compose down
-echo   To rebuild:    start.bat rebuild
+echo   To stop:       commandScripts\stop.bat
+echo   To rebuild:    commandScripts\start.bat rebuild
 echo.
 pause

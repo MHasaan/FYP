@@ -1,0 +1,25 @@
+# ============================================
+# GPU Access Configuration (NVIDIA)
+# ============================================
+# This file automatically merges with docker-compose.yml
+# to provide GPU passthrough for the ML Manager container.
+#
+# Requirements:
+#   - NVIDIA GPU with drivers installed
+#   - NVIDIA Container Toolkit (nvidia-docker2)
+#   - Docker Desktop with WSL2 backend (Windows)
+#
+# Verify GPU access: docker compose exec ml_manager python -c "import torch; print(torch.cuda.is_available())"
+
+services:
+  ml_manager:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility

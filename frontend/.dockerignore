@@ -1,0 +1,16 @@
+.dart_tool/
+.idea/
+.vscode/
+build/
+android/
+ios/
+test/
+*.log
+*.js
+.git
+.gitignore
+.metadata
+README.md
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
