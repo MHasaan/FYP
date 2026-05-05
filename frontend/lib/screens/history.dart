@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
@@ -28,8 +30,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
   final ApiService _api = ApiService();
   List<dynamic> _sessions = [];
   List<dynamic> _recordings = [];
+  List<dynamic> _incidents = [];
+  List<dynamic> _patients = [];
   bool _isLoading = true;
+  bool _isIncidentLoading = false;
   int _selectedView = 0;
+  int _incidentTotal = 0;
+  int? _incidentPatientFilter;
+  String _incidentStatusFilter = 'all';
+  String _incidentEventTypeFilter = 'all';
+  DateTimeRange? _incidentDateRange;
+  String? _incidentError;
 
   @override
   void initState() {
@@ -44,9 +55,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _fetchSessions() async {
+    if (mounted) {
+      setState(() => _isLoading = true);
+    }
+
     try {
-      final sessions = await _api.getSessions();
-      final recordings = await _api.getRecordings();
+      final sessionsFuture = _api.getSessions();
+      final recordingsFuture = _api.getRecordings();
+
+      final sessions = await sessionsFuture;
+      final recordings = await recordingsFuture;
+
       if (mounted) {
         setState(() {
           _sessions = sessions;
@@ -59,15 +78,148 @@ class _HistoryScreenState extends State<HistoryScreen> {
         setState(() => _isLoading = false);
       }
     }
+
+    try {
+      final patients = await _api.getPatients();
+      if (mounted) {
+        setState(() => _patients = patients);
+      }
+    } catch (_) {}
+
+    await _loadIncidents();
+  }
+
+  Future<void> _loadIncidents() async {
+    if (mounted) {
+      setState(() {
+        _isIncidentLoading = true;
+        _incidentError = null;
+      });
+    }
+
+    try {
+      final response = await _api.getIncidents(
+        patientId: _incidentPatientFilter,
+        status: _incidentStatusFilter == 'all' ? null : _incidentStatusFilter,
+        eventType: _incidentEventTypeFilter == 'all' ? null : _incidentEventTypeFilter,
+        startTime: _incidentDateRange?.start,
+        endTime: _incidentDateRange?.end,
+      );
+      if (!mounted) return;
+      final items = (response['items'] as List<dynamic>? ?? const []);
+      final total = response['total'];
+      setState(() {
+        _incidents = items;
+        _incidentTotal = total is num ? total.toInt() : items.length;
+        _isIncidentLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _incidents = [];
+        _incidentTotal = 0;
+        _isIncidentLoading = false;
+        _incidentError = 'Sign in as admin/caregiver to review incidents.';
+      });
+    }
+  }
+
+  Future<void> _pickIncidentDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year + 1),
+      initialDateRange: _incidentDateRange,
+    );
+    if (picked == null) return;
+    setState(() => _incidentDateRange = picked);
+    await _loadIncidents();
+  }
+
+  Future<void> _acknowledgeIncident(int incidentId) async {
+    try {
+      await _api.acknowledgeIncident(incidentId);
+      await _loadIncidents();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to acknowledge incident: $e')),
+      );
+    }
+  }
+
+  Future<void> _resolveIncident(int incidentId) async {
+    try {
+      await _api.resolveIncident(incidentId);
+      await _loadIncidents();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to resolve incident: $e')),
+      );
+    }
+  }
+
+  String _formatIncidentDate(dynamic rawValue) {
+    if (rawValue == null) return '-';
+    try {
+      final parsed = DateTime.parse(rawValue.toString()).toLocal();
+      return '${parsed.year.toString().padLeft(4, '0')}-${parsed.month.toString().padLeft(2, '0')}-${parsed.day.toString().padLeft(2, '0')} '
+          '${parsed.hour.toString().padLeft(2, '0')}:${parsed.minute.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return rawValue.toString();
+    }
+  }
+
+  void _showIncidentDetails(Map<String, dynamic> incident) {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        final details = incident['details'];
+        final detailsMap = details is Map ? Map<String, dynamic>.from(details) : null;
+        final detailsText = detailsMap != null
+            ? const JsonEncoder.withIndent('  ').convert(detailsMap)
+            : (details?.toString() ?? '{}');
+        return AlertDialog(
+          title: Text('Incident #${incident['id'] ?? '-'} details'),
+          content: SizedBox(
+            width: 560,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                'Event: ${incident['event_type'] ?? '-'}\n'
+                'Status: ${incident['status'] ?? '-'}\n'
+                'Severity: ${incident['severity'] ?? '-'}\n'
+                'Detected: ${_formatIncidentDate(incident['detected_at'])}\n'
+                'Patient ID: ${incident['patient_id'] ?? '-'}\n'
+                'Camera ID: ${incident['camera_config_id'] ?? '-'}\n'
+                'Session ID: ${incident['session_id'] ?? '-'}\n'
+                'Confidence: ${incident['confidence'] ?? '-'}\n'
+                'Threshold: ${incident['threshold'] ?? '-'}\n\n'
+                'Details:\n$detailsText',
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final child = _selectedView == 0
-        ? _buildSessionsView(context, theme)
-        : _buildRecordingsView(context, theme);
+    final child = switch (_selectedView) {
+      0 => _buildSessionsView(context, theme),
+      1 => _buildRecordingsView(context, theme),
+      _ => _buildIncidentsView(context, theme),
+    };
 
     return Scaffold(
       body: _isLoading
@@ -120,6 +272,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             selectedIndex: _selectedView,
             sessionsCount: _sessions.length,
             recordingsCount: _recordings.length,
+            incidentsCount: _incidentTotal,
             onChanged: (value) => setState(() => _selectedView = value),
           );
 
@@ -197,9 +350,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   itemCount: _sessions.length,
                   itemBuilder: (context, index) {
                     final session = _sessions[index] as Map<String, dynamic>;
-                    return _SessionCard(
-                      session: session,
-                      colorScheme: theme.colorScheme,
+                    return Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1120),
+                        child: _SessionCard(
+                          session: session,
+                          colorScheme: theme.colorScheme,
+                        ),
+                      ),
                     );
                   },
                 ),
@@ -259,18 +418,184 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   itemCount: _recordings.length,
                   itemBuilder: (context, index) {
                     final recording = _recordings[index] as Map<String, dynamic>;
-                    return _RecordingCard(
-                      recording: recording,
-                      colorScheme: theme.colorScheme,
-                      onPlay: () {
-                        showDialog<void>(
-                          context: context,
-                          builder: (_) => _RecordingPlayerDialog(recording: recording),
-                        );
-                      },
+                    return Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1120),
+                        child: _RecordingCard(
+                          recording: recording,
+                          colorScheme: theme.colorScheme,
+                          onPlay: () {
+                            showDialog<void>(
+                              context: context,
+                              builder: (_) => _RecordingPlayerDialog(recording: recording),
+                            );
+                          },
+                        ),
+                      ),
                     );
                   },
                 ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildIncidentsView(BuildContext context, ThemeData theme) {
+    final colorScheme = theme.colorScheme;
+
+    return Column(
+      children: [
+        _buildHeader(theme),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: colorScheme.surface,
+            border: Border(bottom: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.5))),
+          ),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1120),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 170,
+                    child: DropdownButtonFormField<String>(
+                      value: _incidentStatusFilter,
+                      decoration: const InputDecoration(labelText: 'Status', isDense: true),
+                      items: const [
+                        DropdownMenuItem(value: 'all', child: Text('All')),
+                        DropdownMenuItem(value: 'new', child: Text('New')),
+                        DropdownMenuItem(value: 'acknowledged', child: Text('Acknowledged')),
+                        DropdownMenuItem(value: 'resolved', child: Text('Resolved')),
+                      ],
+                      onChanged: (value) => setState(() => _incidentStatusFilter = value ?? 'all'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 170,
+                    child: DropdownButtonFormField<String>(
+                      value: _incidentEventTypeFilter,
+                      decoration: const InputDecoration(labelText: 'Type', isDense: true),
+                      items: const [
+                        DropdownMenuItem(value: 'all', child: Text('All')),
+                        DropdownMenuItem(value: 'fall', child: Text('Fall')),
+                        DropdownMenuItem(value: 'seizure', child: Text('Seizure')),
+                        DropdownMenuItem(value: 'manual', child: Text('Manual')),
+                      ],
+                      onChanged: (value) => setState(() => _incidentEventTypeFilter = value ?? 'all'),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 260,
+                    child: DropdownButtonFormField<int?>(
+                      value: _incidentPatientFilter,
+                      decoration: const InputDecoration(labelText: 'Patient', isDense: true),
+                      items: [
+                        const DropdownMenuItem<int?>(value: null, child: Text('All patients')),
+                        ..._patients.map((raw) {
+                          final patient = Map<String, dynamic>.from(raw as Map);
+                          final patientId = (patient['id'] as num?)?.toInt();
+                          final name = patient['full_name']?.toString() ?? 'Patient #${patient['id'] ?? '-'}';
+                          return DropdownMenuItem<int?>(
+                            value: patientId,
+                            child: Text(name, overflow: TextOverflow.ellipsis),
+                          );
+                        }),
+                      ],
+                      onChanged: (value) => setState(() => _incidentPatientFilter = value),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _pickIncidentDateRange,
+                    icon: const Icon(Icons.date_range_rounded),
+                    label: Text(
+                      _incidentDateRange == null
+                          ? 'Any date'
+                          : '${_incidentDateRange!.start.toLocal().toString().substring(0, 10)} → ${_incidentDateRange!.end.toLocal().toString().substring(0, 10)}',
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _loadIncidents,
+                    icon: const Icon(Icons.search_rounded),
+                    label: const Text('Apply'),
+                  ),
+                  TextButton.icon(
+                    onPressed: () async {
+                      setState(() {
+                        _incidentStatusFilter = 'all';
+                        _incidentEventTypeFilter = 'all';
+                        _incidentPatientFilter = null;
+                        _incidentDateRange = null;
+                      });
+                      await _loadIncidents();
+                    },
+                    icon: const Icon(Icons.clear_rounded),
+                    label: const Text('Clear'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _isIncidentLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _incidentError != null
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            _incidentError!,
+                            style: TextStyle(color: colorScheme.error, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    )
+                  : _incidents.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [
+                            Padding(
+                              padding: EdgeInsets.all(24),
+                              child: Text('No incidents found for the selected filters.'),
+                            ),
+                          ],
+                        )
+                      : ListView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.all(16),
+                          itemCount: _incidents.length,
+                          itemBuilder: (context, index) {
+                            final incident = Map<String, dynamic>.from(_incidents[index] as Map);
+                            final incidentId = (incident['id'] as num?)?.toInt();
+                            final status = (incident['status'] ?? '').toString().toLowerCase();
+                            return Align(
+                              alignment: Alignment.topCenter,
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 1120),
+                                child: _IncidentCard(
+                                  incident: incident,
+                                  onOpenDetails: () => _showIncidentDetails(incident),
+                                  onAcknowledge: incidentId != null && status == 'new'
+                                      ? () => _acknowledgeIncident(incidentId)
+                                      : null,
+                                  onResolve: incidentId != null && status != 'resolved'
+                                      ? () => _resolveIncident(incidentId)
+                                      : null,
+                                  formatDate: _formatIncidentDate,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
         ),
       ],
     );
@@ -281,12 +606,14 @@ class _HistoryHeader extends StatelessWidget {
   final int selectedIndex;
   final int sessionsCount;
   final int recordingsCount;
+  final int incidentsCount;
   final ValueChanged<int> onChanged;
 
   const _HistoryHeader({
     required this.selectedIndex,
     required this.sessionsCount,
     required this.recordingsCount,
+    required this.incidentsCount,
     required this.onChanged,
   });
 
@@ -298,6 +625,7 @@ class _HistoryHeader extends StatelessWidget {
         segments: [
           ButtonSegment<int>(value: 0, label: Text('Sessions ($sessionsCount)'), icon: const Icon(Icons.history_rounded)),
           ButtonSegment<int>(value: 1, label: Text('Recordings ($recordingsCount)'), icon: const Icon(Icons.video_library_rounded)),
+          ButtonSegment<int>(value: 2, label: Text('Incidents ($incidentsCount)'), icon: const Icon(Icons.warning_amber_rounded)),
         ],
         selected: {selectedIndex},
         onSelectionChanged: (selection) => onChanged(selection.first),
@@ -447,6 +775,132 @@ class _SessionCardState extends State<_SessionCard> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _IncidentCard extends StatelessWidget {
+  final Map<String, dynamic> incident;
+  final VoidCallback onOpenDetails;
+  final Future<void> Function()? onAcknowledge;
+  final Future<void> Function()? onResolve;
+  final String Function(dynamic) formatDate;
+
+  const _IncidentCard({
+    required this.incident,
+    required this.onOpenDetails,
+    required this.onAcknowledge,
+    required this.onResolve,
+    required this.formatDate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final statusColors = theme.extension<AppStatusColors>() ?? AppStatusColors.fallback;
+    final eventType = (incident['event_type'] ?? 'manual').toString();
+    final status = (incident['status'] ?? 'new').toString();
+    final severity = (incident['severity'] ?? 'warning').toString();
+
+    final statusColor = switch (status) {
+      'resolved' => statusColors.success,
+      'acknowledged' => colorScheme.primary,
+      _ => colorScheme.error,
+    };
+    final typeIcon = switch (eventType) {
+      'fall' => Icons.personal_injury_rounded,
+      'seizure' => Icons.bolt_rounded,
+      _ => Icons.flag_rounded,
+    };
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: statusColor.withValues(alpha: 0.15),
+                  child: Icon(typeIcon, color: statusColor),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${eventType.toUpperCase()} incident #${incident['id'] ?? '-'}',
+                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Detected ${formatDate(incident['detected_at'])}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurface.withValues(alpha: 0.7),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: statusColor.withValues(alpha: 0.3)),
+                  ),
+                  child: Text(
+                    status.toUpperCase(),
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 14,
+              runSpacing: 8,
+              children: [
+                Text('Severity: $severity'),
+                Text('Patient: ${incident['patient_id'] ?? '-'}'),
+                Text('Camera: ${incident['camera_config_id'] ?? '-'}'),
+                Text('Confidence: ${incident['confidence'] ?? '-'}'),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: onOpenDetails,
+                  icon: const Icon(Icons.open_in_new_rounded),
+                  label: const Text('Details'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: onAcknowledge == null ? null : () => onAcknowledge!(),
+                  icon: const Icon(Icons.check_circle_outline_rounded),
+                  label: const Text('Acknowledge'),
+                ),
+                FilledButton.icon(
+                  onPressed: onResolve == null ? null : () => onResolve!(),
+                  icon: const Icon(Icons.task_alt_rounded),
+                  label: const Text('Resolve'),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

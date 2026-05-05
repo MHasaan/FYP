@@ -23,6 +23,16 @@ class AppConfig {
       '$apiBaseUrl/api/results/session/$sessionId';
   static String sessionStatsUrl(int sessionId) =>
       '$apiBaseUrl/api/results/session/$sessionId/stats';
+    static String get authLoginUrl => '$apiBaseUrl/api/auth/login';
+    static String get authRegisterUrl => '$apiBaseUrl/api/auth/register';
+    static String get authLogoutUrl => '$apiBaseUrl/api/auth/logout';
+    static String get authMeUrl => '$apiBaseUrl/api/auth/me';
+    static String get authUsersUrl => '$apiBaseUrl/api/auth/users';
+    static String get patientsUrl => '$apiBaseUrl/api/patients';
+    static String get incidentsUrl => '$apiBaseUrl/api/incidents';
+    static String get detectionSettingsUrl => '$apiBaseUrl/api/detection-settings';
+    static String get incidentReportsUrl => '$apiBaseUrl/api/reports/incidents';
+    static String get systemCapabilitiesUrl => '$apiBaseUrl/api/system/capabilities';
 
   // WebSocket endpoints
   static String get wsFeedUrl => '$wsBaseUrl/ws/feed';

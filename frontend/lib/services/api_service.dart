@@ -16,6 +16,23 @@ class ApiException implements Exception {
 /// REST API service for communicating with the backend
 class ApiService {
   final http.Client _client = http.Client();
+  static String? _authToken;
+
+  static void setAuthToken(String? token) {
+    _authToken = token?.trim().isEmpty == true ? null : token?.trim();
+  }
+
+  Map<String, String> _buildHeaders({bool json = true}) {
+    final headers = <String, String>{};
+    if (json) {
+      headers['Content-Type'] = 'application/json';
+    }
+    final token = _authToken;
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+    return headers;
+  }
 
   /// Validates HTTP response and returns decoded JSON
   Map<String, dynamic> _handleJsonResponse(http.Response response) {
@@ -49,7 +66,10 @@ class ApiService {
   // ============ Camera ============
 
   Future<List<dynamic>> getCameraConfigs() async {
-    final response = await _client.get(Uri.parse(AppConfig.camerasUrl));
+    final response = await _client.get(
+      Uri.parse(AppConfig.camerasUrl),
+      headers: _buildHeaders(json: false),
+    );
     return _handleJsonListResponse(response);
   }
 
@@ -57,14 +77,17 @@ class ApiService {
       Map<String, dynamic> config) async {
     final response = await _client.post(
       Uri.parse(AppConfig.camerasUrl),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(config),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteCameraConfig(int id) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.camerasUrl}/$id'));
+    final response = await _client.delete(
+      Uri.parse('${AppConfig.camerasUrl}/$id'),
+      headers: _buildHeaders(json: false),
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -76,14 +99,17 @@ class ApiService {
   ) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.camerasUrl}/$id'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(config),
     );
     return _handleJsonResponse(response);
   }
 
   Future<Map<String, dynamic>> getCameraSources() async {
-    final response = await _client.get(Uri.parse(AppConfig.cameraSourcesUrl));
+    final response = await _client.get(
+      Uri.parse(AppConfig.cameraSourcesUrl),
+      headers: _buildHeaders(json: false),
+    );
     return _handleJsonResponse(response);
   }
 
@@ -521,6 +547,251 @@ class ApiService {
     if (modelName != null) url += '&model_name=$modelName';
     final response = await _client.get(Uri.parse(url));
     return _handleJsonListResponse(response);
+  }
+
+  // ============ Auth & Users ============
+
+  Future<Map<String, dynamic>> login(String email, String password) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.authLoginUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode({'email': email, 'password': password}),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> registerUser(Map<String, dynamic> payload) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.authRegisterUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> logout(String accessToken) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.authLogoutUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode({'access_token': accessToken}),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> getCurrentUser() async {
+    final response = await _client.get(
+      Uri.parse(AppConfig.authMeUrl),
+      headers: _buildHeaders(json: false),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<List<dynamic>> listUsers() async {
+    final response = await _client.get(
+      Uri.parse(AppConfig.authUsersUrl),
+      headers: _buildHeaders(json: false),
+    );
+    return _handleJsonListResponse(response);
+  }
+
+  Future<Map<String, dynamic>> createUser(Map<String, dynamic> payload) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.authUsersUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> updateUser(int userId, Map<String, dynamic> payload) async {
+    final response = await _client.patch(
+      Uri.parse('${AppConfig.authUsersUrl}/$userId'),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<void> deleteUser(int userId) async {
+    final response = await _client.delete(
+      Uri.parse('${AppConfig.authUsersUrl}/$userId'),
+      headers: _buildHeaders(json: false),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(response.statusCode, response.body);
+    }
+  }
+
+  // ============ Patients ============
+
+  Future<List<dynamic>> getPatients({String? search}) async {
+    final queryParams = <String, String>{
+      if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+    };
+    final uri = Uri.parse(AppConfig.patientsUrl).replace(queryParameters: queryParams);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
+    return _handleJsonListResponse(response);
+  }
+
+  Future<Map<String, dynamic>> createPatient(Map<String, dynamic> payload) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.patientsUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> updatePatient(int patientId, Map<String, dynamic> payload) async {
+    final response = await _client.patch(
+      Uri.parse('${AppConfig.patientsUrl}/$patientId'),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<void> deletePatient(int patientId) async {
+    final response = await _client.delete(
+      Uri.parse('${AppConfig.patientsUrl}/$patientId'),
+      headers: _buildHeaders(json: false),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(response.statusCode, response.body);
+    }
+  }
+
+  // ============ Incidents ============
+
+  Future<Map<String, dynamic>> getIncidents({
+    int limit = 50,
+    int offset = 0,
+    int? patientId,
+    int? cameraConfigId,
+    String? status,
+    String? eventType,
+    DateTime? startTime,
+    DateTime? endTime,
+  }) async {
+    final queryParams = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+      if (patientId != null) 'patient_id': '$patientId',
+      if (cameraConfigId != null) 'camera_config_id': '$cameraConfigId',
+      if (status != null && status.isNotEmpty) 'status': status,
+      if (eventType != null && eventType.isNotEmpty) 'event_type': eventType,
+      if (startTime != null) 'start_time': startTime.toUtc().toIso8601String(),
+      if (endTime != null) 'end_time': endTime.toUtc().toIso8601String(),
+    };
+    final uri = Uri.parse(AppConfig.incidentsUrl).replace(queryParameters: queryParams);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> createIncident(Map<String, dynamic> payload) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.incidentsUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> updateIncident(int incidentId, Map<String, dynamic> payload) async {
+    final response = await _client.patch(
+      Uri.parse('${AppConfig.incidentsUrl}/$incidentId'),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> acknowledgeIncident(int incidentId) async {
+    final response = await _client.post(
+      Uri.parse('${AppConfig.incidentsUrl}/$incidentId/acknowledge'),
+      headers: _buildHeaders(),
+      body: jsonEncode({}),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> resolveIncident(int incidentId) async {
+    final response = await _client.post(
+      Uri.parse('${AppConfig.incidentsUrl}/$incidentId/resolve'),
+      headers: _buildHeaders(),
+      body: jsonEncode({}),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  // ============ Detection Settings ============
+
+  Future<List<dynamic>> getDetectionSettings({
+    int? cameraConfigId,
+    int? patientId,
+  }) async {
+    final queryParams = <String, String>{
+      if (cameraConfigId != null) 'camera_config_id': '$cameraConfigId',
+      if (patientId != null) 'patient_id': '$patientId',
+    };
+    final uri = Uri.parse(AppConfig.detectionSettingsUrl).replace(queryParameters: queryParams);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
+    return _handleJsonListResponse(response);
+  }
+
+  Future<Map<String, dynamic>> createDetectionSetting(Map<String, dynamic> payload) async {
+    final response = await _client.post(
+      Uri.parse(AppConfig.detectionSettingsUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> updateDetectionSetting(int settingId, Map<String, dynamic> payload) async {
+    final response = await _client.patch(
+      Uri.parse('${AppConfig.detectionSettingsUrl}/$settingId'),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<void> deleteDetectionSetting(int settingId) async {
+    final response = await _client.delete(
+      Uri.parse('${AppConfig.detectionSettingsUrl}/$settingId'),
+      headers: _buildHeaders(json: false),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(response.statusCode, response.body);
+    }
+  }
+
+  // ============ Reports & System ============
+
+  Future<Map<String, dynamic>> getIncidentReport({
+    int? patientId,
+    int? cameraConfigId,
+    DateTime? startTime,
+    DateTime? endTime,
+  }) async {
+    final queryParams = <String, String>{
+      if (patientId != null) 'patient_id': '$patientId',
+      if (cameraConfigId != null) 'camera_config_id': '$cameraConfigId',
+      if (startTime != null) 'start_time': startTime.toUtc().toIso8601String(),
+      if (endTime != null) 'end_time': endTime.toUtc().toIso8601String(),
+    };
+    final uri = Uri.parse(AppConfig.incidentReportsUrl).replace(queryParameters: queryParams);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> getSystemCapabilities() async {
+    final response = await _client.get(
+      Uri.parse(AppConfig.systemCapabilitiesUrl),
+      headers: _buildHeaders(json: false),
+    );
+    return _handleJsonResponse(response);
   }
 
   void dispose() {

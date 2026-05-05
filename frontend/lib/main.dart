@@ -4,17 +4,20 @@ import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'widgets/sidebar.dart';
 import 'services/storage_service.dart';
+import 'services/api_service.dart';
 import 'screens/dashboard.dart';
 import 'screens/live_feed.dart';
 import 'screens/settings.dart';
 import 'screens/history.dart';
 import 'screens/multi_camera_grid.dart';
 import 'utils/browser_location.dart';
+import 'security/role_access.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final storageService = StorageService();
   await storageService.init();
+  ApiService.setAuthToken(storageService.authToken);
 
   runApp(
     MultiProvider(
@@ -57,7 +60,6 @@ class MainApp extends StatefulWidget {
 
 class MainAppState extends State<MainApp> {
   int _selectedIndex = 0;
-  late final List<Widget> _screens;
 
   Uri _resolveLaunchUri() {
     final href = browserLocationHref();
@@ -105,13 +107,6 @@ class MainAppState extends State<MainApp> {
   void initState() {
     super.initState();
     _selectedIndex = _resolveInitialIndexFromUrl();
-    _screens = [
-      DashboardScreen(onNavigate: _onItemTapped),
-      MultiCameraGridScreen(onNavigateToTab: _onItemTapped),
-      const LiveFeedScreen(),
-      const SettingsScreen(),
-      const HistoryScreen(),
-    ];
   }
 
   final List<NavigationDestination> _destinations = const [
@@ -148,6 +143,34 @@ class MainAppState extends State<MainApp> {
 
   @override
   Widget build(BuildContext context) {
+    final storage = context.watch<StorageService>();
+    final role = storage.authRole;
+    final isAuthenticated = storage.hasAuthSession;
+    final screens = <Widget>[
+      DashboardScreen(onNavigate: _onItemTapped),
+      RoleAccess.canViewMonitor(isAuthenticated: isAuthenticated, role: role)
+          ? MultiCameraGridScreen(onNavigateToTab: _onItemTapped)
+          : const _RestrictedScreen(
+              title: 'Monitor access is restricted',
+              message: 'Only admin and caregiver accounts can access multi-camera control.',
+            ),
+      RoleAccess.canViewLive(isAuthenticated: isAuthenticated)
+          ? const LiveFeedScreen()
+          : const _RestrictedScreen(
+              title: 'Live view requires sign-in',
+              message: 'Sign in with an assigned Eldercare account to view live streams.',
+            ),
+      const SettingsScreen(),
+      RoleAccess.canViewInsights(isAuthenticated: isAuthenticated)
+          ? const HistoryScreen()
+          : const _RestrictedScreen(
+              title: 'Insights require sign-in',
+              message: 'Sign in to review incidents, sessions, and recordings.',
+            ),
+    ];
+
+    final safeIndex = _selectedIndex.clamp(0, screens.length - 1) as int;
+
     final isWide = MediaQuery.of(context).size.width > 800;
 
     return Scaffold(
@@ -155,9 +178,17 @@ class MainAppState extends State<MainApp> {
           ? Row(
               children: [
                 SideNavigation(
-                  selectedIndex: _selectedIndex,
+                  selectedIndex: safeIndex,
                   onItemSelected: _onItemTapped,
                   destinations: _destinations,
+                  footerTitle: RoleAccess.footerTitle(
+                    isAuthenticated: isAuthenticated,
+                    role: role,
+                  ),
+                  footerSubtitle: RoleAccess.footerSubtitle(
+                    isAuthenticated: isAuthenticated,
+                    role: role,
+                  ),
                 ),
                 Expanded(
                   child: SafeArea(
@@ -172,22 +203,71 @@ class MainAppState extends State<MainApp> {
                             );
                           },
                           child: KeyedSubtree(
-                            key: ValueKey<int>(_selectedIndex),
-                            child: _screens[_selectedIndex],
+                            key: ValueKey<int>(safeIndex),
+                            child: screens[safeIndex],
                           ),
                         ),
                   ),
                 ),
               ],
             )
-          : SafeArea(child: _screens[_selectedIndex]),
+          : SafeArea(child: screens[safeIndex]),
       bottomNavigationBar: isWide
           ? null
           : NavigationBar(
-              selectedIndex: _selectedIndex,
+              selectedIndex: safeIndex,
               onDestinationSelected: _onItemTapped,
               destinations: _destinations,
             ),
+    );
+  }
+}
+
+class _RestrictedScreen extends StatelessWidget {
+  final String title;
+  final String message;
+
+  const _RestrictedScreen({
+    required this.title,
+    required this.message,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 600),
+        child: Card(
+          margin: const EdgeInsets.all(24),
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.lock_outline_rounded, size: 40, color: colorScheme.primary),
+                const SizedBox(height: 12),
+                Text(
+                  title,
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  message,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: colorScheme.onSurface.withValues(alpha: 0.75),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

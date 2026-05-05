@@ -2,10 +2,86 @@
 SQLAlchemy Database Models
 """
 
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, JSON, ForeignKey, BigInteger
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, JSON, ForeignKey, BigInteger, Date
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
+
+
+class UserAccount(Base):
+    """Application user with an Eldercare role."""
+    __tablename__ = "user_accounts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    full_name = Column(String(255), nullable=False)
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    password_hash = Column(String(500), nullable=False)
+    role = Column(String(50), nullable=False, default="caregiver")  # admin, caregiver, patient_relative
+    phone = Column(String(50), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    tokens = relationship("AuthToken", back_populates="user", cascade="all, delete-orphan")
+    assigned_patients = relationship(
+        "PatientProfile",
+        foreign_keys="PatientProfile.caregiver_id",
+        back_populates="caregiver",
+    )
+    relative_patients = relationship(
+        "PatientProfile",
+        foreign_keys="PatientProfile.relative_user_id",
+        back_populates="relative_user",
+    )
+
+
+class AuthToken(Base):
+    """Opaque bearer token hash for frontend sessions."""
+    __tablename__ = "auth_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=False)
+    token_hash = Column(String(128), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("UserAccount", back_populates="tokens")
+
+
+class PatientProfile(Base):
+    """Patient profile used by Eldercare monitoring workflows."""
+    __tablename__ = "patient_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    full_name = Column(String(255), nullable=False)
+    date_of_birth = Column(Date, nullable=True)
+    gender = Column(String(50), nullable=True)
+    address = Column(Text, nullable=True)
+    fall_risk = Column(Boolean, default=False)
+    seizure_risk = Column(Boolean, default=False)
+    risk_notes = Column(Text, nullable=True)
+    primary_contact_name = Column(String(255), nullable=True)
+    primary_contact_phone = Column(String(50), nullable=True)
+    primary_contact_email = Column(String(255), nullable=True)
+    caregiver_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=True)
+    relative_user_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    caregiver = relationship(
+        "UserAccount",
+        foreign_keys=[caregiver_id],
+        back_populates="assigned_patients",
+    )
+    relative_user = relationship(
+        "UserAccount",
+        foreign_keys=[relative_user_id],
+        back_populates="relative_patients",
+    )
+    camera_configs = relationship("CameraConfig", back_populates="patient")
+    incidents = relationship("Incident", back_populates="patient")
+    detection_settings = relationship("DetectionSetting", back_populates="patient", cascade="all, delete-orphan")
 
 
 class Session(Base):
@@ -55,6 +131,8 @@ class CameraConfig(Base):
     source_type = Column(String(50), nullable=False)  # usb, rtsp, http, video_file
     source_url = Column(String(500), nullable=False)
     group_name = Column(String(255), nullable=True)
+    location = Column(String(255), nullable=True)
+    patient_id = Column(Integer, ForeignKey("patient_profiles.id"), nullable=True)
     fps = Column(Integer, default=30)
     width = Column(Integer, default=640)
     height = Column(Integer, default=480)
@@ -67,6 +145,9 @@ class CameraConfig(Base):
     pipeline_instances = relationship("PipelineInstance", back_populates="camera_config")
     scheduled_jobs = relationship("ScheduledJob", back_populates="camera_config")
     roi_zones = relationship("ROIZone", back_populates="camera_config", cascade="all, delete-orphan")
+    patient = relationship("PatientProfile", back_populates="camera_configs")
+    incidents = relationship("Incident", back_populates="camera_config")
+    detection_settings = relationship("DetectionSetting", back_populates="camera_config", cascade="all, delete-orphan")
 
 
 # ============================================
@@ -96,6 +177,59 @@ class PipelineInstance(Base):
     alert_rules = relationship("AlertRule", back_populates="pipeline_instance", cascade="all, delete-orphan")
     activity_logs = relationship("ActivityLog", back_populates="pipeline_instance")
     recordings = relationship("Recording", back_populates="pipeline_instance")
+    incidents = relationship("Incident", back_populates="pipeline_instance")
+
+
+class DetectionSetting(Base):
+    """Per-camera or per-patient detector toggles and thresholds."""
+    __tablename__ = "detection_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    camera_config_id = Column(Integer, ForeignKey("camera_configs.id"), nullable=True)
+    patient_id = Column(Integer, ForeignKey("patient_profiles.id"), nullable=True)
+    sensitivity = Column(Float, default=0.5)
+    pose_enabled = Column(Boolean, default=True)
+    fall_enabled = Column(Boolean, default=True)
+    seizure_enabled = Column(Boolean, default=False)
+    fall_threshold = Column(Float, default=0.5)
+    seizure_threshold = Column(Float, default=0.7)
+    local_patches_enabled = Column(Boolean, default=True)
+    global_patches_enabled = Column(Boolean, default=True)
+    kinematics_enabled = Column(Boolean, default=True)
+    seizure_pipeline_enabled = Column(Boolean, default=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    camera_config = relationship("CameraConfig", back_populates="detection_settings")
+    patient = relationship("PatientProfile", back_populates="detection_settings")
+
+
+class Incident(Base):
+    """Fall/seizure incident created from detections or manual review."""
+    __tablename__ = "incidents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_type = Column(String(50), nullable=False)  # fall, seizure, manual
+    status = Column(String(50), default="new")  # new, acknowledged, resolved
+    severity = Column(String(50), default="warning")
+    detected_at = Column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    camera_config_id = Column(Integer, ForeignKey("camera_configs.id"), nullable=True)
+    patient_id = Column(Integer, ForeignKey("patient_profiles.id"), nullable=True)
+    pipeline_instance_id = Column(Integer, ForeignKey("pipeline_instances.id"), nullable=True)
+    session_id = Column(Integer, ForeignKey("sessions.id"), nullable=True)
+    confidence = Column(Float, nullable=True)
+    threshold = Column(Float, nullable=True)
+    details = Column(JSON, default={})
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    camera_config = relationship("CameraConfig", back_populates="incidents")
+    patient = relationship("PatientProfile", back_populates="incidents")
+    pipeline_instance = relationship("PipelineInstance", back_populates="incidents")
 
 
 class ActivityLog(Base):
@@ -243,3 +377,17 @@ class ROIZone(Base):
 
     # Relationships
     camera_config = relationship("CameraConfig", back_populates="roi_zones")
+
+
+class SystemPlan(Base):
+    """Roadmap placeholder rows for planned Eldercare capabilities."""
+    __tablename__ = "system_plans"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(100), nullable=False, unique=True)
+    title = Column(String(255), nullable=False)
+    status = Column(String(50), default="planned")
+    target_phase = Column(String(50), nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

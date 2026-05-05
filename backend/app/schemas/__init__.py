@@ -4,12 +4,62 @@ Pydantic Schemas for API request/response validation
 
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Any, Literal
-from datetime import datetime
+from datetime import date, datetime
 
 
 # Base schema config to avoid warnings about model_ prefix
 class BaseSchema(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
+
+
+# ============ Auth/User Schemas ============
+
+UserRole = Literal["admin", "caregiver", "patient_relative"]
+
+
+class UserRegister(BaseModel):
+    full_name: str
+    email: str
+    password: str = Field(min_length=8)
+    role: UserRole = "caregiver"
+    phone: Optional[str] = None
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class UserCreate(UserRegister):
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[UserRole] = None
+    phone: Optional[str] = None
+    is_active: Optional[bool] = None
+    password: Optional[str] = Field(default=None, min_length=8)
+
+
+class UserResponse(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    role: str
+    phone: Optional[str]
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_at: datetime
+    user: UserResponse
 
 
 # ============ Camera Schemas ============
@@ -19,6 +69,8 @@ class CameraConfigCreate(BaseModel):
     source_type: str  # usb, rtsp, http, video_file
     source_url: str
     group_name: Optional[str] = None
+    location: Optional[str] = None
+    patient_id: Optional[int] = None
     fps: int = 30
     width: int = 640
     height: int = 480
@@ -32,6 +84,8 @@ class CameraConfigUpdate(BaseModel):
     source_type: Optional[str] = None
     source_url: Optional[str] = None
     group_name: Optional[str] = None
+    location: Optional[str] = None
+    patient_id: Optional[int] = None
     fps: Optional[int] = None
     width: Optional[int] = None
     height: Optional[int] = None
@@ -43,6 +97,46 @@ class CameraConfigUpdate(BaseModel):
 class CameraConfigResponse(CameraConfigCreate):
     id: int
     created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ============ Patient Schemas ============
+
+class PatientCreate(BaseModel):
+    full_name: str
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    fall_risk: bool = False
+    seizure_risk: bool = False
+    risk_notes: Optional[str] = None
+    primary_contact_name: Optional[str] = None
+    primary_contact_phone: Optional[str] = None
+    primary_contact_email: Optional[str] = None
+    caregiver_id: Optional[int] = None
+    relative_user_id: Optional[int] = None
+
+
+class PatientUpdate(BaseModel):
+    full_name: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    fall_risk: Optional[bool] = None
+    seizure_risk: Optional[bool] = None
+    risk_notes: Optional[str] = None
+    primary_contact_name: Optional[str] = None
+    primary_contact_phone: Optional[str] = None
+    primary_contact_email: Optional[str] = None
+    caregiver_id: Optional[int] = None
+    relative_user_id: Optional[int] = None
+
+
+class PatientResponse(PatientCreate):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -503,6 +597,114 @@ class FrameResultResponse(BaseModel):
     timestamp: datetime
     results: dict[str, Any]  # model_name -> result_data
     total_processing_time_ms: float
+
+
+# ============ Eldercare Detection Settings ============
+
+class DetectionSettingCreate(BaseModel):
+    camera_config_id: Optional[int] = None
+    patient_id: Optional[int] = None
+    sensitivity: float = Field(default=0.5, ge=0, le=1)
+    pose_enabled: bool = True
+    fall_enabled: bool = True
+    seizure_enabled: bool = False
+    fall_threshold: float = Field(default=0.5, ge=0, le=1)
+    seizure_threshold: float = Field(default=0.7, ge=0, le=1)
+    local_patches_enabled: bool = True
+    global_patches_enabled: bool = True
+    kinematics_enabled: bool = True
+    seizure_pipeline_enabled: bool = False
+    notes: Optional[str] = None
+
+
+class DetectionSettingUpdate(BaseModel):
+    camera_config_id: Optional[int] = None
+    patient_id: Optional[int] = None
+    sensitivity: Optional[float] = Field(default=None, ge=0, le=1)
+    pose_enabled: Optional[bool] = None
+    fall_enabled: Optional[bool] = None
+    seizure_enabled: Optional[bool] = None
+    fall_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    seizure_threshold: Optional[float] = Field(default=None, ge=0, le=1)
+    local_patches_enabled: Optional[bool] = None
+    global_patches_enabled: Optional[bool] = None
+    kinematics_enabled: Optional[bool] = None
+    seizure_pipeline_enabled: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class DetectionSettingResponse(DetectionSettingCreate):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ============ Incident Schemas ============
+
+class IncidentCreate(BaseModel):
+    event_type: Literal["fall", "seizure", "manual"]
+    status: Literal["new", "acknowledged", "resolved"] = "new"
+    severity: str = "warning"
+    detected_at: Optional[datetime] = None
+    camera_config_id: Optional[int] = None
+    patient_id: Optional[int] = None
+    pipeline_instance_id: Optional[int] = None
+    session_id: Optional[int] = None
+    confidence: Optional[float] = None
+    threshold: Optional[float] = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    notes: Optional[str] = None
+
+
+class IncidentUpdate(BaseModel):
+    status: Optional[Literal["new", "acknowledged", "resolved"]] = None
+    severity: Optional[str] = None
+    camera_config_id: Optional[int] = None
+    patient_id: Optional[int] = None
+    confidence: Optional[float] = None
+    threshold: Optional[float] = None
+    details: Optional[dict[str, Any]] = None
+    notes: Optional[str] = None
+
+
+class IncidentResponse(IncidentCreate):
+    id: int
+    detected_at: datetime
+    acknowledged_at: Optional[datetime]
+    resolved_at: Optional[datetime]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class IncidentReportResponse(BaseModel):
+    total: int
+    by_event_type: dict[str, int]
+    by_status: dict[str, int]
+    by_severity: dict[str, int]
+    patient_id: Optional[int]
+    camera_config_id: Optional[int]
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    recent: list[IncidentResponse]
+
+
+# ============ System Capability Schemas ============
+
+class SystemPlanResponse(BaseModel):
+    id: int
+    key: str
+    title: str
+    status: str
+    target_phase: Optional[str]
+    description: Optional[str]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ============ General ============

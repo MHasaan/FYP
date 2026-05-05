@@ -16,8 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import async_session
-from app.models import DetectionResult, Session, AlertRule, ActivityLog, PipelineInstance
-from app.services.activity_logger import log_event
+from app.models import (
+    ActivityLog,
+    AlertRule,
+    CameraConfig,
+    DetectionResult,
+    Incident,
+    PipelineInstance,
+)
 
 settings = get_settings()
 
@@ -244,8 +250,93 @@ class ResultProcessor:
             }
         )
         db.add(log)
-        
+
+        # 3. Create a formal incident record for fall/seizure alerts.
+        incident = await self._create_incident_from_alert(
+            db=db,
+            rule=rule,
+            instance_id=instance_id,
+            session_id=session_id,
+            detection_result=result,
+        )
+        if incident is not None:
+            await db.flush()
+            log.extra_data = {
+                **(log.extra_data or {}),
+                "incident_id": incident.id,
+            }
+
         print(f"🔔 ALERT: {message}")
 
-        # 3. Actions (e.g. Webhooks) - can be expanded later
-        # For now, just printing is enough to verify it works
+        # 4. Actions (e.g. Webhooks/mobile push) can extend from this hook.
+
+    async def _create_incident_from_alert(
+        self,
+        db: AsyncSession,
+        rule: AlertRule,
+        instance_id: Optional[int],
+        session_id: int,
+        detection_result: Any,
+    ) -> Incident | None:
+        model_name = (rule.model_name or "").lower()
+        if model_name not in {"fall_detection", "seizure_detection"}:
+            return None
+
+        event_type = "fall" if model_name == "fall_detection" else "seizure"
+        detection_payload = (
+            detection_result
+            if isinstance(detection_result, dict)
+            else {"value": detection_result}
+        )
+
+        confidence_raw = detection_payload.get("probability") or detection_payload.get("confidence")
+        try:
+            confidence = float(confidence_raw) if confidence_raw is not None else None
+        except (TypeError, ValueError):
+            confidence = None
+
+        trigger_condition = rule.trigger_condition or {}
+        threshold_raw = trigger_condition.get("confidence_min")
+        try:
+            threshold = float(threshold_raw) if threshold_raw is not None else None
+        except (TypeError, ValueError):
+            threshold = None
+
+        camera_config_id = None
+        patient_id = None
+        if instance_id is not None:
+            instance_result = await db.execute(
+                select(PipelineInstance).where(PipelineInstance.id == instance_id)
+            )
+            instance = instance_result.scalar_one_or_none()
+            if instance is not None:
+                camera_config_id = instance.camera_config_id
+
+        if camera_config_id is not None:
+            camera_result = await db.execute(
+                select(CameraConfig).where(CameraConfig.id == camera_config_id)
+            )
+            camera = camera_result.scalar_one_or_none()
+            if camera is not None:
+                patient_id = camera.patient_id
+
+        incident = Incident(
+            event_type=event_type,
+            status="new",
+            severity="critical" if event_type == "fall" else "warning",
+            camera_config_id=camera_config_id,
+            patient_id=patient_id,
+            pipeline_instance_id=instance_id,
+            session_id=session_id,
+            confidence=confidence,
+            threshold=threshold,
+            details={
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "model_name": rule.model_name,
+                "trigger_condition": trigger_condition,
+                "detection_data": detection_payload,
+            },
+        )
+        db.add(incident)
+        return incident

@@ -215,3 +215,122 @@ CREATE INDEX IF NOT EXISTS idx_roi_zones_active ON roi_zones(is_active);
 
 CREATE INDEX IF NOT EXISTS idx_device_tokens_active ON device_tokens(is_active);
 CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks(is_active);
+
+-- ============================================
+-- Eldercare auth/patient/incident extensions
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS user_accounts (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(500) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'caregiver',
+    phone VARCHAR(50),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES user_accounts(id) ON DELETE CASCADE,
+    token_hash VARCHAR(128) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS patient_profiles (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    date_of_birth DATE,
+    gender VARCHAR(50),
+    address TEXT,
+    fall_risk BOOLEAN DEFAULT FALSE,
+    seizure_risk BOOLEAN DEFAULT FALSE,
+    risk_notes TEXT,
+    primary_contact_name VARCHAR(255),
+    primary_contact_phone VARCHAR(50),
+    primary_contact_email VARCHAR(255),
+    caregiver_id INTEGER REFERENCES user_accounts(id) ON DELETE SET NULL,
+    relative_user_id INTEGER REFERENCES user_accounts(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
+);
+
+ALTER TABLE camera_configs ADD COLUMN IF NOT EXISTS location VARCHAR(255);
+ALTER TABLE camera_configs ADD COLUMN IF NOT EXISTS patient_id INTEGER;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fk_camera_configs_patient'
+    ) THEN
+        ALTER TABLE camera_configs
+            ADD CONSTRAINT fk_camera_configs_patient
+            FOREIGN KEY (patient_id) REFERENCES patient_profiles(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS detection_settings (
+    id SERIAL PRIMARY KEY,
+    camera_config_id INTEGER REFERENCES camera_configs(id) ON DELETE CASCADE,
+    patient_id INTEGER REFERENCES patient_profiles(id) ON DELETE CASCADE,
+    sensitivity FLOAT DEFAULT 0.5,
+    pose_enabled BOOLEAN DEFAULT TRUE,
+    fall_enabled BOOLEAN DEFAULT TRUE,
+    seizure_enabled BOOLEAN DEFAULT FALSE,
+    fall_threshold FLOAT DEFAULT 0.5,
+    seizure_threshold FLOAT DEFAULT 0.7,
+    local_patches_enabled BOOLEAN DEFAULT TRUE,
+    global_patches_enabled BOOLEAN DEFAULT TRUE,
+    kinematics_enabled BOOLEAN DEFAULT TRUE,
+    seizure_pipeline_enabled BOOLEAN DEFAULT FALSE,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS incidents (
+    id SERIAL PRIMARY KEY,
+    event_type VARCHAR(50) NOT NULL,
+    status VARCHAR(50) DEFAULT 'new',
+    severity VARCHAR(50) DEFAULT 'warning',
+    detected_at TIMESTAMPTZ DEFAULT NOW(),
+    acknowledged_at TIMESTAMPTZ,
+    resolved_at TIMESTAMPTZ,
+    camera_config_id INTEGER REFERENCES camera_configs(id) ON DELETE SET NULL,
+    patient_id INTEGER REFERENCES patient_profiles(id) ON DELETE SET NULL,
+    pipeline_instance_id INTEGER REFERENCES pipeline_instances(id) ON DELETE SET NULL,
+    session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    confidence FLOAT,
+    threshold FLOAT,
+    details JSONB DEFAULT '{}',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS system_plans (
+    id SERIAL PRIMARY KEY,
+    key VARCHAR(100) NOT NULL UNIQUE,
+    title VARCHAR(255) NOT NULL,
+    status VARCHAR(50) DEFAULT 'planned',
+    target_phase VARCHAR(50),
+    description TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_accounts_email ON user_accounts(email);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_patient_profiles_caregiver ON patient_profiles(caregiver_id);
+CREATE INDEX IF NOT EXISTS idx_patient_profiles_relative ON patient_profiles(relative_user_id);
+CREATE INDEX IF NOT EXISTS idx_camera_configs_patient ON camera_configs(patient_id);
+CREATE INDEX IF NOT EXISTS idx_detection_settings_camera ON detection_settings(camera_config_id);
+CREATE INDEX IF NOT EXISTS idx_detection_settings_patient ON detection_settings(patient_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_detected_at ON incidents(detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_incidents_status ON incidents(status);
+CREATE INDEX IF NOT EXISTS idx_incidents_patient ON incidents(patient_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_camera ON incidents(camera_config_id);

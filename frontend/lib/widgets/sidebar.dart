@@ -40,7 +40,14 @@ class _NavBrandHeader extends StatelessWidget {
 
 class _NavFooter extends StatelessWidget {
   final bool extended;
-  const _NavFooter({required this.extended});
+  final String title;
+  final String subtitle;
+
+  const _NavFooter({
+    required this.extended,
+    required this.title,
+    required this.subtitle,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +69,7 @@ class _NavFooter extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Admin',
+                    title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
@@ -72,7 +79,7 @@ class _NavFooter extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Console',
+                    subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
@@ -94,12 +101,16 @@ class SideNavigation extends StatelessWidget {
   final int selectedIndex;
   final Function(int) onItemSelected;
   final List<NavigationDestination> destinations;
+  final String footerTitle;
+  final String footerSubtitle;
 
   const SideNavigation({
     super.key,
     required this.selectedIndex,
     required this.onItemSelected,
     required this.destinations,
+    this.footerTitle = 'User',
+    this.footerSubtitle = 'Console',
   });
 
   @override
@@ -113,7 +124,11 @@ class SideNavigation extends StatelessWidget {
       onDestinationSelected: onItemSelected,
       labelType: extended ? null : NavigationRailLabelType.selected,
       leading: _NavBrandHeader(extended: extended),
-      trailing: _NavFooter(extended: extended),
+      trailing: _NavFooter(
+        extended: extended,
+        title: footerTitle,
+        subtitle: footerSubtitle,
+      ),
       destinations: destinations
           .map(
             (d) => NavigationRailDestination(

@@ -9,7 +9,25 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.database import init_db
-from app.routes import camera, pipeline, results, instances, logs, alerts, recordings, notifications, webhooks, schedules, roi
+from app.routes import (
+    alerts,
+    auth,
+    camera,
+    detection_settings,
+    incidents,
+    instances,
+    logs,
+    notifications,
+    patients,
+    pipeline,
+    recordings,
+    reports,
+    results,
+    roi,
+    schedules,
+    system,
+    webhooks,
+)
 from app.ws.feed import feed_websocket
 from app.ws.results import results_websocket
 from app.ws.instance_feed import instance_feed_websocket
@@ -73,7 +91,12 @@ async def verify_api_key(request: Request, call_next):
     """Verify API key for protected endpoints."""
     # Skip auth for public endpoints
     public_paths = ["/health", "/", "/docs", "/openapi.json", "/redoc"]
-    if request.url.path in public_paths or request.url.path.startswith("/docs"):
+    public_prefixes = ["/api/auth/login", "/api/auth/register"]
+    if (
+        request.url.path in public_paths
+        or request.url.path.startswith("/docs")
+        or any(request.url.path.startswith(prefix) for prefix in public_prefixes)
+    ):
         return await call_next(request)
 
     # Skip auth for WebSocket upgrade requests (handled separately)
@@ -94,6 +117,12 @@ async def verify_api_key(request: Request, call_next):
 
 # ============ REST Routes ============
 app.include_router(camera.router)
+app.include_router(auth.router)
+app.include_router(patients.router)
+app.include_router(incidents.router)
+app.include_router(detection_settings.router)
+app.include_router(reports.router)
+app.include_router(system.router)
 app.include_router(pipeline.router)
 app.include_router(results.router)
 app.include_router(instances.router)
