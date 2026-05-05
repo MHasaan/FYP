@@ -82,11 +82,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    # GPU runtime for NVIDIA CUDA acceleration
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # GPU access is configured in docker-compose.override.yml
 
   # ============================================
   # Flutter Web (Nginx)

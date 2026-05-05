@@ -1,7 +1,8 @@
+# syntax=docker/dockerfile:1
 # ============================================
 # ML Manager - NVIDIA CUDA Base Image
 # ============================================
-# Uses CUDA 12.2 runtime for GPU access
+# Uses CUDA 11.8 runtime for GPU access
 # Includes Python 3.11, OpenCV, PyTorch, ultralytics
 
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
@@ -10,15 +11,13 @@ FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 # Force unbuffered Python output for Docker logs
 ENV PYTHONUNBUFFERED=1
-# Make pip more resilient on unstable networks during large wheel downloads
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=180 \
-    PIP_RETRIES=20
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies (cached across rebuilds — saves ~200MB re-download)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-venv \
     python3-pip \
@@ -29,37 +28,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender-dev \
     ffmpeg \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    curl
 
 # Make python3.11 the default python
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
     && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip
+# Upgrade pip (cached)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip
 
-# Install Python dependencies
+# Install Python dependencies (cached — PyTorch ~2GB stays in cache between rebuilds)
 COPY requirements.txt .
-# 1. Install all requirements
-# 2. Explicitly remove any onnxruntime (CPU) to avoid conflicts
-# 3. Force reinstall onnxruntime-gpu to ensure a clean state
-# 4. Remove any leftover __pycache__ or pyc files from the build context
-RUN \
-    pip install --retries "${PIP_RETRIES}" --timeout "${PIP_DEFAULT_TIMEOUT}" --resume-retries "${PIP_RETRIES}" --prefer-binary -r requirements.txt && \
-    pip uninstall -y onnxruntime onnxruntime-gpu && \
-    pip install --retries "${PIP_RETRIES}" --timeout "${PIP_DEFAULT_TIMEOUT}" --resume-retries "${PIP_RETRIES}" --prefer-binary onnxruntime-gpu==1.17.1 && \
-    find /app -name "__pycache__" -type d -exec rm -rf {} + && \
-    find /app -name "*.pyc" -delete
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 300 --retries 5 -r requirements.txt
 
-# Copy application code
-COPY manager/ ./manager/
+# Fix onnxruntime conflict: remove CPU version, ensure GPU version is installed
+# Separate layer so it only reruns when requirements.txt changes
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip uninstall -y onnxruntime 2>/dev/null; \
+    pip install --timeout 300 --retries 5 onnxruntime-gpu==1.17.1
 
-# Copy pipeline step implementations
-COPY steps/ ./steps/
-
-# Copy model weights (if any)
+# Copy model weights first (changes rarely — stays cached when code changes)
 COPY models/ ./models/
+
+# Copy application code last (changes frequently — only this layer rebuilds)
+COPY manager/ ./manager/
+COPY steps/ ./steps/
 
 # Expose port for health checks
 EXPOSE 8001

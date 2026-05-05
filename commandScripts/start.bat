@@ -7,12 +7,17 @@ REM Run setup.bat first if containers don't exist.
 REM
 REM Usage: start.bat          - Start existing containers
 REM        start.bat rebuild  - Rebuild and start containers
+REM        start.bat rebuild frontend  - Rebuild specific containers
 REM =============================================================================
 
 setlocal enabledelayedexpansion
 
 REM Navigate to project root (parent of scripts folder)
 cd /d "%~dp0.."
+
+REM Enable BuildKit for better caching
+set DOCKER_BUILDKIT=1
+set COMPOSE_DOCKER_CLI_BUILD=1
 
 set REBUILD=0
 if "%1"=="rebuild" set REBUILD=1
@@ -76,21 +81,7 @@ if %errorlevel% neq 0 (
 
 REM Start containers
 if %REBUILD%==1 (
-    REM If rebuilding frontend ^(or rebuilding all^), regenerate Flutter web assets first.
-    set NEED_FRONTEND_BUILD=0
-    if "%SERVICES%"=="" (
-        set NEED_FRONTEND_BUILD=1
-    ) else (
-        for %%S in (%SERVICES%) do (
-            if /i "%%S"=="frontend" set NEED_FRONTEND_BUILD=1
-        )
-    )
-
-    if !NEED_FRONTEND_BUILD!==1 (
-        echo [*] Frontend will be rebuilt inside Docker...
-    )
-
-    echo [*] Rebuilding and starting containers... %SERVICES%
+    echo [*] Rebuilding and starting containers (uses cached layers)... %SERVICES%
     docker compose up -d --build %SERVICES%
 ) else (
     echo [*] Starting existing containers... %SERVICES%
@@ -99,6 +90,9 @@ if %REBUILD%==1 (
 
 if %errorlevel% neq 0 (
     echo [ERROR] Failed to start containers!
+    echo.
+    echo Tip: If you got a timeout, just run this command again.
+    echo Docker caches everything that succeeded, so retries are fast.
     pause
     exit /b 1
 )
@@ -122,7 +116,7 @@ echo   API Docs:    http://localhost:8000/docs
 echo   API Health:  http://localhost:8000/health
 echo.
 echo   To view logs:  docker compose logs -f
-echo   To stop:       docker compose down
-echo   To rebuild:    start.bat rebuild
+echo   To stop:       commandScripts\stop.bat
+echo   To rebuild:    commandScripts\start.bat rebuild
 echo.
 pause

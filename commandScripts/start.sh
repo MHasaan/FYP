@@ -13,6 +13,10 @@
 
 set -e  # Exit on error
 
+# Enable BuildKit for better caching (cache mounts, parallel builds)
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'

@@ -3,7 +3,7 @@
 .env.production
 
 # Docker
-docker-compose.override.yml
+# docker-compose.override.yml is tracked because it contains GPU config
 
 # Python
 __pycache__/

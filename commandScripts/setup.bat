@@ -11,6 +11,10 @@ setlocal enabledelayedexpansion
 REM Navigate to project root (parent of scripts folder)
 cd /d "%~dp0.."
 
+REM Enable BuildKit for better caching (cache mounts, parallel builds)
+set DOCKER_BUILDKIT=1
+set COMPOSE_DOCKER_CLI_BUILD=1
+
 echo.
 echo ============================================================
 echo   FYP Project - Setup Script
@@ -74,16 +78,33 @@ REM Clean up old containers
 echo [*] Cleaning up old containers...
 docker compose down --remove-orphans 2>nul
 
-REM Pull base images
-echo [*] Pulling base images...
-docker pull postgres:16-alpine
-docker pull redis:7-alpine
+REM Pull base images with retry
+echo [*] Pulling base images (with retry)...
 
-REM Build containers
-echo [*] Building all containers (this may take a few minutes)...
+:pull_postgres
+docker pull postgres:16-alpine
+if %errorlevel% neq 0 (
+    echo [!] Failed to pull postgres, retrying in 5s...
+    timeout /t 5 /nobreak >nul
+    goto pull_postgres
+)
+
+:pull_redis
+docker pull redis:7-alpine
+if %errorlevel% neq 0 (
+    echo [!] Failed to pull redis, retrying in 5s...
+    timeout /t 5 /nobreak >nul
+    goto pull_redis
+)
+
+REM Build containers (uses layer caching — only downloads what's new)
+echo [*] Building all containers (uses cached layers)...
 docker compose build
 if %errorlevel% neq 0 (
     echo [ERROR] Build failed!
+    echo.
+    echo Tip: If you got a timeout, just run this script again.
+    echo Docker caches everything that succeeded, so retries are fast.
     pause
     exit /b 1
 )
@@ -115,8 +136,8 @@ echo   Web App:     http://localhost
 echo   API Docs:    http://localhost:8000/docs
 echo   API Health:  http://localhost:8000/health
 echo.
-echo   To start later:  start.bat
-echo   To stop:         docker compose down
+echo   To start later:  commandScripts\start.bat
+echo   To stop:         commandScripts\stop.bat
 echo   To view logs:    docker compose logs -f
 echo.
 pause
