@@ -43,11 +43,15 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --timeout 300 --retries 5 -r requirements.txt
 
-# Fix onnxruntime conflict: remove CPU version, ensure GPU version is installed
-# Separate layer so it only reruns when requirements.txt changes
+# Force-reinstall onnxruntime-gpu cleanly: previous installs sometimes left
+# the package dir half-populated (missing __init__.py), making `import
+# onnxruntime` succeed as an empty namespace package and breaking all
+# .get_available_providers() callers downstream. The smoke-test at the
+# end fails the build if the install is still broken.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip uninstall -y onnxruntime 2>/dev/null; \
-    pip install --timeout 300 --retries 5 onnxruntime-gpu==1.17.1
+    pip uninstall -y onnxruntime onnxruntime-gpu 2>/dev/null; true && \
+    pip install --force-reinstall --no-deps --timeout 300 --retries 5 onnxruntime-gpu==1.17.1 && \
+    python -c "import onnxruntime; assert onnxruntime.get_available_providers(), 'onnxruntime install broken — no providers'"
 
 # Copy model weights first (changes rarely — stays cached when code changes)
 COPY models/ ./models/

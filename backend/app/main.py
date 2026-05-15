@@ -32,6 +32,7 @@ from app.ws.feed import feed_websocket
 from app.ws.results import results_websocket
 from app.ws.instance_feed import instance_feed_websocket
 from app.ws.instance_results import instance_results_websocket
+from app.ws.incidents import incidents_ws
 from app.services.redis_service import close_redis_client
 from app.services.schedule_service import ScheduleRunnerService
 from app.services.result_processor import ResultProcessor
@@ -91,7 +92,7 @@ async def verify_api_key(request: Request, call_next):
     """Verify API key for protected endpoints."""
     # Skip auth for public endpoints
     public_paths = ["/health", "/", "/docs", "/openapi.json", "/redoc"]
-    public_prefixes = ["/api/auth/login", "/api/auth/register"]
+    public_prefixes = ["/api/auth/login", "/api/auth/register", "/api/auth/users-count"]
     if (
         request.url.path in public_paths
         or request.url.path.startswith("/docs")
@@ -158,6 +159,12 @@ async def ws_instance_feed(websocket: WebSocket, instance_id: int):
 async def ws_instance_results(websocket: WebSocket, instance_id: int):
     """Instance-specific ML results WebSocket."""
     await instance_results_websocket(websocket, instance_id)
+
+
+@app.websocket("/ws/incidents")
+async def ws_incidents(websocket: WebSocket, token: str | None = None):
+    """Real-time incident broadcast (FR9). Token via ?token= query param."""
+    await incidents_ws(websocket, token)
 
 
 # ============ Health Check ============

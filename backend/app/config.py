@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     camera_width: int = 640
     camera_height: int = 480
 
+    # Firebase Cloud Messaging (push notifications). When unset the backend
+    # falls back to simulation mode so dev environments work without Firebase.
+    fcm_credentials_path: str = ""
+    fcm_default_icon: str = "ic_notification"
+
     @field_validator("database_url", "postgres_password", "secret_key")
     @classmethod
     def validate_required(cls, v: str, info) -> str:

@@ -2,6 +2,8 @@
 Database connection and session management
 """
 
+from contextlib import asynccontextmanager
+
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -24,6 +26,16 @@ class Base(DeclarativeBase):
 
 async def get_db() -> AsyncSession:
     """Dependency that provides a database session."""
+    async with async_session() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+
+
+@asynccontextmanager
+async def get_db_context():
+    """Async context manager version of get_db (for use outside FastAPI DI)."""
     async with async_session() as session:
         try:
             yield session

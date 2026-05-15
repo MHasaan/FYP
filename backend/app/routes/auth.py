@@ -3,6 +3,7 @@ Authentication and user-role routes.
 """
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
@@ -10,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AuthToken, UserAccount
-from app.schemas import AuthTokenResponse, UserCreate, UserLogin, UserRegister, UserResponse, UserUpdate
+from app.schemas import (
+    AuthTokenResponse,
+    PasswordChange,
+    UserCreate,
+    UserLogin,
+    UserRegister,
+    UserResponse,
+    UserUpdate,
+)
 from app.services.auth_service import (
     create_access_token,
     get_current_user,
@@ -121,17 +130,41 @@ async def logout(
     return {"status": "ok"}
 
 
-@router.get("/users", response_model=list[UserResponse])
-async def list_users(
-    _: UserAccount = Depends(require_roles("admin")),
+@router.get("/users-count")
+async def users_count(db: AsyncSession = Depends(get_db)):
+    """Public: total user count. Used by the LoginScreen to gate first-admin signup."""
+    result = await db.execute(select(func.count(UserAccount.id)))
+    return {"count": result.scalar_one() or 0}
+
+
+@router.post("/me/password")
+async def change_password(
+    payload: PasswordChange,
+    user: UserAccount = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List users for administrator role management."""
-    result = await db.execute(
-        select(UserAccount)
-        .where(UserAccount.is_active == True)  # noqa: E712
-        .order_by(UserAccount.created_at.desc())
-    )
+    """Allow the current user to change their own password."""
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+    user.password_hash = hash_password(payload.new_password)
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.get("/users", response_model=list[UserResponse])
+async def list_users(
+    role: Optional[str] = None,
+    _: UserAccount = Depends(require_roles("admin", "caregiver")),
+    db: AsyncSession = Depends(get_db),
+):
+    """List users (admin/caregiver). Optional `role` filter for picker dropdowns."""
+    query = select(UserAccount).where(UserAccount.is_active == True)  # noqa: E712
+    if role:
+        query = query.where(UserAccount.role == role)
+    result = await db.execute(query.order_by(UserAccount.full_name))
     return result.scalars().all()
 
 

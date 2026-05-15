@@ -16,6 +16,7 @@ from app.schemas import (
     PushNotificationTestRequest,
     PushNotificationTestResponse,
 )
+from app.services import push_service
 
 
 router = APIRouter(prefix="/api/notifications", tags=["Push Notifications"])
@@ -95,21 +96,47 @@ async def send_test_notification(payload: PushNotificationTestRequest, db: Async
         query = query.where(DeviceToken.user_id == payload.user_id)
 
     result = await db.execute(query)
-    recipients = result.scalars().all()
+    recipients = list(result.scalars().all())
 
     now = datetime.now(timezone.utc)
     for recipient in recipients:
         recipient.last_used_at = now
-
     await db.commit()
 
+    # Only attempt real FCM delivery for tokens whose platform is fcm. APNS-only
+    # tokens still bump last_used_at but are skipped at the transport layer.
+    fcm_tokens = [t for t in recipients if t.platform == "fcm"]
+    dispatch_result = await push_service.dispatch_test(
+        db,
+        fcm_tokens,
+        title=payload.title or "Eldercare test notification",
+        body=payload.body or "Real-time alerting is wired up.",
+    )
+
+    simulated = bool(dispatch_result.get("simulated"))
+    sent_to = int(dispatch_result.get("sent_to") or 0)
+    if simulated:
+        # In simulation mode we still report the count of matched recipients so
+        # the UI can confirm the routing/scoping logic is correct.
+        sent_to = len(recipients)
+        message = (
+            "Simulated push dispatch complete. "
+            "Set FCM_CREDENTIALS_PATH to enable real delivery."
+        )
+    elif dispatch_result.get("error"):
+        message = f"FCM error: {dispatch_result['error']}"
+    elif sent_to == 0:
+        message = "No FCM-capable devices were registered for the requested filter."
+    else:
+        failed = int(dispatch_result.get("failed") or 0)
+        message = f"Push delivered to {sent_to} device(s)."
+        if failed:
+            message += f" {failed} failed and were marked inactive."
+
     return PushNotificationTestResponse(
-        sent_to=len(recipients),
+        sent_to=sent_to,
         platform=payload.platform,
         user_id=payload.user_id,
-        simulated=True,
-        message=(
-            "Simulated push dispatch complete. "
-            "Integrate FCM/APNS provider credentials to send real mobile notifications."
-        ),
+        simulated=simulated,
+        message=message,
     )

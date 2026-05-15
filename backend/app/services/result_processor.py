@@ -41,6 +41,7 @@ class ResultProcessor:
         self._task: Optional[asyncio.Task] = None
         self._redis: Optional[aioredis.Redis] = None
         self._last_alert_time: dict[int, float] = {}  # rule_id -> timestamp
+        self._pending_incident_publishes: list[dict] = []
 
     async def start(self):
         """Start the background processing task."""
@@ -103,18 +104,89 @@ class ResultProcessor:
             async with async_session() as db:
                 # 1. Save detections to database
                 await self._save_detections(db, session_id, frame_id, results, timing)
-                
+
                 # 2. Update instance stats (frames processed)
                 if instance_id:
                     await self._update_instance_stats(db, instance_id)
 
-                # 3. Evaluate alert rules
+                # 3. Evaluate alert rules (may queue incident publishes)
+                self._pending_incident_publishes.clear()
                 await self._evaluate_alerts(db, instance_id, session_id, results)
 
                 await db.commit()
 
+            # 4. After successful commit, publish any new incidents to Redis so
+            # the /ws/incidents endpoint can fan them out to caregivers.
+            if self._pending_incident_publishes and self._redis is not None:
+                for payload in self._pending_incident_publishes:
+                    try:
+                        await self._redis.publish("incidents:new", json.dumps(payload))
+                    except Exception as e:
+                        print(f"⚠️ Failed to publish incident event: {e}")
+
+                # 5. Dispatch FCM push notifications for the same incidents.
+                # Use a fresh session so we can re-fetch patient/camera names
+                # and avoid stale ORM state from the committed session above.
+                try:
+                    await self._dispatch_pushes(self._pending_incident_publishes)
+                except Exception as e:
+                    print(f"⚠️ Failed to dispatch push notifications: {e}")
+
+                self._pending_incident_publishes.clear()
+
         except Exception as e:
             print(f"⚠️ Error handling result message: {e}")
+
+    async def _dispatch_pushes(self, payloads: list[dict]):
+        """Send a push for each newly-created incident."""
+        if not payloads:
+            return
+        # Local import to avoid pulling firebase_admin into the import chain
+        # before configuration is available.
+        from app.services import push_service
+        from app.models import CameraConfig, PatientProfile
+
+        async with async_session() as db:
+            for payload in payloads:
+                incident_id = payload.get("id")
+                if incident_id is None:
+                    continue
+
+                # Re-fetch the incident in this session for the dispatcher.
+                inc_result = await db.execute(
+                    select(Incident).where(Incident.id == incident_id)
+                )
+                incident = inc_result.scalar_one_or_none()
+                if incident is None:
+                    continue
+
+                patient_name = None
+                if incident.patient_id is not None:
+                    p_result = await db.execute(
+                        select(PatientProfile).where(PatientProfile.id == incident.patient_id)
+                    )
+                    p = p_result.scalar_one_or_none()
+                    if p is not None:
+                        patient_name = p.full_name
+
+                camera_name = None
+                if incident.camera_config_id is not None:
+                    c_result = await db.execute(
+                        select(CameraConfig).where(CameraConfig.id == incident.camera_config_id)
+                    )
+                    c = c_result.scalar_one_or_none()
+                    if c is not None:
+                        camera_name = c.name
+
+                try:
+                    await push_service.dispatch_incident(
+                        db,
+                        incident,
+                        patient_name=patient_name,
+                        camera_name=camera_name,
+                    )
+                except Exception as e:
+                    print(f"⚠️ push_service.dispatch_incident failed: {e}")
 
     async def _save_detections(self, db: AsyncSession, session_id: int, frame_id: int, results: dict, timing: dict):
         """Save results from all models for this frame."""
@@ -265,6 +337,21 @@ class ResultProcessor:
                 **(log.extra_data or {}),
                 "incident_id": incident.id,
             }
+            # Queue payload for post-commit Redis publish (FR9 real-time alerting).
+            self._pending_incident_publishes.append({
+                "id": incident.id,
+                "event_type": incident.event_type,
+                "severity": incident.severity,
+                "status": incident.status,
+                "patient_id": incident.patient_id,
+                "camera_config_id": incident.camera_config_id,
+                "pipeline_instance_id": incident.pipeline_instance_id,
+                "session_id": incident.session_id,
+                "confidence": float(incident.confidence) if incident.confidence is not None else None,
+                "threshold": float(incident.threshold) if incident.threshold is not None else None,
+                "detected_at": (incident.detected_at.isoformat()
+                                if incident.detected_at else datetime.now(timezone.utc).isoformat()),
+            })
 
         print(f"🔔 ALERT: {message}")
 

@@ -356,10 +356,18 @@ async def create_pipeline_instance(
 @router.get("/", response_model=List[PipelineInstanceResponse])
 async def list_pipeline_instances(
     status_filter: str = None,
+    include_orphans: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """List all pipeline instances, optionally filtered by status."""
+    """List all pipeline instances, optionally filtered by status.
+
+    By default, instances whose camera_config has been deleted (orphans)
+    are hidden — they can't run without a camera and just confuse the UI.
+    Pass include_orphans=true to see them anyway.
+    """
     query = select(PipelineInstance)
+    if not include_orphans:
+        query = query.where(PipelineInstance.camera_config_id.isnot(None))
     if status_filter:
         query = query.where(PipelineInstance.status == status_filter)
 

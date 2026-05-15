@@ -2,13 +2,16 @@
 Camera management routes
 """
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_, select
 from app.database import get_db
-from app.models import CameraConfig, PatientProfile, UserAccount
+from app.models import CameraConfig, PatientProfile, PipelineInstance, UserAccount
 from app.schemas import CameraConfigCreate, CameraConfigResponse, CameraConfigUpdate, CameraSourceRequest
 from app.services.auth_service import get_current_user, require_roles
+from app.services.redis_service import get_redis_client
 
 router = APIRouter(prefix="/api/camera", tags=["Camera"])
 
@@ -111,11 +114,29 @@ async def delete_camera_config(
     user: UserAccount = Depends(require_roles("admin", "caregiver")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a camera configuration."""
+    """Delete a camera configuration and all associated pipeline instances."""
     result = await db.execute(_scoped_camera_query(user).where(CameraConfig.id == config_id))
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="Camera configuration not found")
+
+    # Delete all pipeline instances tied to this camera and stop them in the ML manager
+    instances_result = await db.execute(
+        select(PipelineInstance).where(PipelineInstance.camera_config_id == config_id)
+    )
+    instances = instances_result.scalars().all()
+    if instances:
+        redis = await get_redis_client()
+        for instance in instances:
+            try:
+                await redis.publish(
+                    "pipeline:control",
+                    json.dumps({"action": "delete", "instance_id": instance.id}),
+                )
+            except Exception:
+                pass
+            await db.delete(instance)
+
     await db.delete(config)
     await db.commit()
 

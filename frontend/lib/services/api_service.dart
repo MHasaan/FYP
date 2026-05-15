@@ -66,10 +66,7 @@ class ApiService {
   // ============ Camera ============
 
   Future<List<dynamic>> getCameraConfigs() async {
-    final response = await _client.get(
-      Uri.parse(AppConfig.camerasUrl),
-      headers: _buildHeaders(json: false),
-    );
+    final response = await _client.get(Uri.parse(AppConfig.camerasUrl));
     return _handleJsonListResponse(response);
   }
 
@@ -77,17 +74,14 @@ class ApiService {
       Map<String, dynamic> config) async {
     final response = await _client.post(
       Uri.parse(AppConfig.camerasUrl),
-      headers: _buildHeaders(),
+      headers: {'Content-Type': 'application/json'},
       body: jsonEncode(config),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteCameraConfig(int id) async {
-    final response = await _client.delete(
-      Uri.parse('${AppConfig.camerasUrl}/$id'),
-      headers: _buildHeaders(json: false),
-    );
+    final response = await _client.delete(Uri.parse('${AppConfig.camerasUrl}/$id'));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -99,17 +93,14 @@ class ApiService {
   ) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.camerasUrl}/$id'),
-      headers: _buildHeaders(),
+      headers: {'Content-Type': 'application/json'},
       body: jsonEncode(config),
     );
     return _handleJsonResponse(response);
   }
 
   Future<Map<String, dynamic>> getCameraSources() async {
-    final response = await _client.get(
-      Uri.parse(AppConfig.cameraSourcesUrl),
-      headers: _buildHeaders(json: false),
-    );
+    final response = await _client.get(Uri.parse(AppConfig.cameraSourcesUrl));
     return _handleJsonResponse(response);
   }
 
@@ -610,16 +601,6 @@ class ApiService {
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
-  }
-
-  Future<void> deleteUser(int userId) async {
-    final response = await _client.delete(
-      Uri.parse('${AppConfig.authUsersUrl}/$userId'),
-      headers: _buildHeaders(json: false),
-    );
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException(response.statusCode, response.body);
-    }
   }
 
   // ============ Patients ============

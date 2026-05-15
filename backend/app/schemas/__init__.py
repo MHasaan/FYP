@@ -62,6 +62,26 @@ class AuthTokenResponse(BaseModel):
     user: UserResponse
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+class IncidentEvent(BaseModel):
+    """Payload pushed over /ws/incidents when a new incident is created."""
+    id: int
+    event_type: str
+    severity: Optional[str] = None
+    status: str
+    patient_id: Optional[int] = None
+    patient_name: Optional[str] = None
+    camera_config_id: Optional[int] = None
+    camera_name: Optional[str] = None
+    confidence: Optional[float] = None
+    threshold: Optional[float] = None
+    detected_at: datetime
+
+
 # ============ Camera Schemas ============
 
 class CameraConfigCreate(BaseModel):

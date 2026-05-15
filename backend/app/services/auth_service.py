@@ -116,3 +116,24 @@ def require_roles(*roles: str) -> Callable:
         return user
 
     return _dependency
+
+
+async def get_user_from_token(token: str, db: AsyncSession) -> UserAccount | None:
+    """Resolve a UserAccount from a raw token (for WebSocket auth via ?token= query)."""
+    if not token:
+        return None
+    token_digest = hash_token(token)
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(AuthToken)
+        .options(selectinload(AuthToken.user))
+        .join(AuthToken.user)
+        .where(
+            AuthToken.token_hash == token_digest,
+            AuthToken.revoked_at.is_(None),
+            AuthToken.expires_at > now,
+            UserAccount.is_active == True,  # noqa: E712
+        )
+    )
+    auth_token = result.scalar_one_or_none()
+    return auth_token.user if auth_token else None

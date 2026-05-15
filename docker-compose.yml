@@ -45,11 +45,16 @@ services:
     container_name: fyp-backend
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Set FCM_CREDENTIALS_PATH in .env to enable real push delivery.
+      # Defaults to the mounted credentials path below.
+      - FCM_CREDENTIALS_PATH=${FCM_CREDENTIALS_PATH:-/app/credentials/fcm-service-account.json}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend/app:/app/app
       - ./videos:/videos:ro
+      - ./backend/credentials:/app/credentials:ro
     depends_on:
       database:
         condition: service_healthy
