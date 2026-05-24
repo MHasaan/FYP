@@ -26,6 +26,7 @@ from app.routes import (
     roi,
     schedules,
     system,
+    videos,
     webhooks,
 )
 from app.ws.feed import feed_websocket
@@ -134,6 +135,7 @@ app.include_router(notifications.router)
 app.include_router(webhooks.router)
 app.include_router(schedules.router)
 app.include_router(roi.router)
+app.include_router(videos.router)
 
 
 # ============ WebSocket Endpoints ============

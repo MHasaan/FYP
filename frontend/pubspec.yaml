@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.2
+  sdk: ^3.9.0
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -43,6 +43,8 @@ dependencies:
   url_launcher: ^6.3.1
   fl_chart: ^1.2.0
   animations: ^2.0.11
+  flutter_animate: ^4.5.0
+  file_picker: ^8.1.4
 
   # Firebase / push notifications (FR10). Web build does not require native
   # config — the package gracefully no-ops when Firebase isn't initialized.

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 
@@ -20,6 +22,17 @@ class ApiService {
 
   static void setAuthToken(String? token) {
     _authToken = token?.trim().isEmpty == true ? null : token?.trim();
+  }
+
+  /// Public read-only access to the current bearer token.
+  static String? get authToken => _authToken;
+
+  /// Optional 401 callback (e.g. AuthController logs out on unauthorized).
+  /// Pass `null` to clear. Kept as a stub so wiring doesn't break — actual
+  /// invocation is handled in `_handleJsonResponse` if/when we route 401s.
+  static void Function()? _on401;
+  static void registerOn401(void Function()? cb) {
+    _on401 = cb;
   }
 
   Map<String, String> _buildHeaders({bool json = true}) {
@@ -56,6 +69,80 @@ class ApiService {
     throw ApiException(response.statusCode, response.body);
   }
 
+  // ============ Video Upload ============
+
+  /// Upload a video file to the backend. The backend stores it at
+  /// /videos/uploads/<uuid>.<ext> and returns that server path. Use the
+  /// returned path as the `source_url` of a CameraConfig with
+  /// source_type='video_file' to make the ML manager process it.
+  ///
+  /// On Flutter web (where `dart:io File` isn't available), pass `bytes` +
+  /// `filename` instead of `filePath`. `onProgress` is called with
+  /// (sentBytes, totalBytes) as the upload streams.
+  Future<Map<String, dynamic>> uploadVideo({
+    String? filePath,
+    List<int>? bytes,
+    String? filename,
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/videos/upload');
+    final request = http.MultipartRequest('POST', uri);
+
+    // Auth header (token, if any) — multipart sets its own Content-Type.
+    final tok = _authToken;
+    if (tok != null && tok.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $tok';
+    }
+
+    // Attach the file
+    if (filePath != null) {
+      final file = File(filePath);
+      final length = await file.length();
+      final stream = http.ByteStream(_progressStream(file.openRead(), length, onProgress));
+      request.files.add(http.MultipartFile(
+        'file',
+        stream,
+        length,
+        filename: filename ?? file.uri.pathSegments.last,
+      ));
+    } else if (bytes != null && filename != null) {
+      // Web path — wrap in a controllable stream to report progress
+      final total = bytes.length;
+      final stream = http.ByteStream(_progressStream(
+        Stream.fromIterable([bytes]),
+        total,
+        onProgress,
+      ));
+      request.files.add(http.MultipartFile(
+        'file',
+        stream,
+        total,
+        filename: filename,
+      ));
+    } else {
+      throw ArgumentError('Provide either filePath or (bytes + filename).');
+    }
+
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    return _handleJsonResponse(response);
+  }
+
+  /// Wraps a byte stream so we can report `(sent, total)` to a progress
+  /// callback as data flows through it.
+  Stream<List<int>> _progressStream(
+    Stream<List<int>> source,
+    int total,
+    void Function(int sent, int total)? onProgress,
+  ) async* {
+    int sent = 0;
+    await for (final chunk in source) {
+      sent += chunk.length;
+      if (onProgress != null) onProgress(sent, total);
+      yield chunk;
+    }
+  }
+
   // ============ Health ============
 
   Future<Map<String, dynamic>> checkHealth() async {
@@ -66,7 +153,7 @@ class ApiService {
   // ============ Camera ============
 
   Future<List<dynamic>> getCameraConfigs() async {
-    final response = await _client.get(Uri.parse(AppConfig.camerasUrl));
+    final response = await _client.get(Uri.parse(AppConfig.camerasUrl), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
@@ -74,14 +161,14 @@ class ApiService {
       Map<String, dynamic> config) async {
     final response = await _client.post(
       Uri.parse(AppConfig.camerasUrl),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(config),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteCameraConfig(int id) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.camerasUrl}/$id'));
+    final response = await _client.delete(Uri.parse('${AppConfig.camerasUrl}/$id'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -93,14 +180,14 @@ class ApiService {
   ) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.camerasUrl}/$id'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(config),
     );
     return _handleJsonResponse(response);
   }
 
   Future<Map<String, dynamic>> getCameraSources() async {
-    final response = await _client.get(Uri.parse(AppConfig.cameraSourcesUrl));
+    final response = await _client.get(Uri.parse(AppConfig.cameraSourcesUrl), headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
@@ -115,14 +202,14 @@ class ApiService {
       if (cameraConfigId != null) 'camera_config_id': '$cameraConfigId',
     };
     final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/roi/zones').replace(queryParameters: queryParams);
-    final response = await _client.get(uri);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> createROIZone(Map<String, dynamic> payload) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/roi/zones'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -131,14 +218,14 @@ class ApiService {
   Future<Map<String, dynamic>> updateROIZone(int zoneId, Map<String, dynamic> payload) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.apiBaseUrl}/api/roi/zones/$zoneId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteROIZone(int zoneId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/roi/zones/$zoneId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/roi/zones/$zoneId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -148,7 +235,7 @@ class ApiService {
 
   Future<Map<String, dynamic>> getPipelineStatus() async {
     final response =
-        await _client.get(Uri.parse(AppConfig.pipelineStatusUrl));
+        await _client.get(Uri.parse(AppConfig.pipelineStatusUrl), headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
@@ -156,7 +243,7 @@ class ApiService {
       Map<String, dynamic> command) async {
     final response = await _client.post(
       Uri.parse(AppConfig.pipelineControlUrl),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(command),
     );
     return _handleJsonResponse(response);
@@ -179,13 +266,13 @@ class ApiService {
 
   Future<List<dynamic>> getSessions({int limit = 20, int offset = 0}) async {
     final response = await _client.get(
-        Uri.parse('${AppConfig.sessionsUrl}?limit=$limit&offset=$offset'));
+        Uri.parse('${AppConfig.sessionsUrl}?limit=$limit&offset=$offset'), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> getSessionStats(int sessionId) async {
     final response =
-        await _client.get(Uri.parse(AppConfig.sessionStatsUrl(sessionId)));
+        await _client.get(Uri.parse(AppConfig.sessionStatsUrl(sessionId)), headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
@@ -194,7 +281,7 @@ class ApiService {
   Future<List<dynamic>> getInstances({String? statusFilter}) async {
     var url = AppConfig.instancesUrl;
     if (statusFilter != null) url += '?status_filter=$statusFilter';
-    final response = await _client.get(Uri.parse(url));
+    final response = await _client.get(Uri.parse(url), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
@@ -217,12 +304,12 @@ class ApiService {
       if (searchQuery != null && searchQuery.isNotEmpty) 'search_query': searchQuery,
     };
     final uri = Uri.parse('${AppConfig.instancesUrl}/paged').replace(queryParameters: queryParams);
-    final response = await _client.get(uri);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
   Future<Map<String, dynamic>> getInstance(int instanceId) async {
-    final response = await _client.get(Uri.parse('${AppConfig.instancesUrl}/$instanceId'));
+    final response = await _client.get(Uri.parse('${AppConfig.instancesUrl}/$instanceId'), headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
@@ -232,7 +319,7 @@ class ApiService {
   ) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.instancesUrl}/$instanceId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(updateData),
     );
     return _handleJsonResponse(response);
@@ -241,7 +328,7 @@ class ApiService {
   Future<Map<String, dynamic>> createInstance(Map<String, dynamic> instanceData) async {
     final response = await _client.post(
       Uri.parse(AppConfig.instancesUrl),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(instanceData),
     );
     return _handleJsonResponse(response);
@@ -250,7 +337,7 @@ class ApiService {
   Future<Map<String, dynamic>> controlInstance(int instanceId, String action) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.instancesUrl}/$instanceId/control'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode({'action': action}),
     );
     return _handleJsonResponse(response);
@@ -259,7 +346,7 @@ class ApiService {
   Future<Map<String, dynamic>> updateInstanceModels(int instanceId, List<String> enabledModels) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.instancesUrl}/$instanceId/models'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode({'enabled_models': enabledModels}),
     );
     return _handleJsonResponse(response);
@@ -268,21 +355,21 @@ class ApiService {
   Future<Map<String, dynamic>> updateInstanceConfig(int instanceId, Map<String, dynamic> modelConfigs) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.instancesUrl}/$instanceId/config'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode({'model_configs': modelConfigs}),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteInstance(int instanceId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.instancesUrl}/$instanceId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.instancesUrl}/$instanceId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
   }
 
   Future<Map<String, dynamic>> getInstanceStatus(int instanceId) async {
-    final response = await _client.get(Uri.parse('${AppConfig.instancesUrl}/$instanceId/status'));
+    final response = await _client.get(Uri.parse('${AppConfig.instancesUrl}/$instanceId/status'), headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
@@ -291,7 +378,7 @@ class ApiService {
   ) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.instancesUrl}/import-batch'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(importPayload),
     );
     return _handleJsonResponse(response);
@@ -300,7 +387,7 @@ class ApiService {
   // ============ Alert Rules ============
 
   Future<List<dynamic>> getAlertRules() async {
-    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/alerts/'));
+    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/alerts/'), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
@@ -309,7 +396,7 @@ class ApiService {
   ) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/alerts/'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -321,14 +408,14 @@ class ApiService {
   ) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.apiBaseUrl}/api/alerts/$ruleId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteAlertRule(int ruleId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/alerts/$ruleId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/alerts/$ruleId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -337,14 +424,14 @@ class ApiService {
   // ============ Push Notifications ============
 
   Future<List<dynamic>> getDeviceTokens() async {
-    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/devices'));
+    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/devices'), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> registerDeviceToken(Map<String, dynamic> payload) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/devices'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -353,14 +440,14 @@ class ApiService {
   Future<Map<String, dynamic>> updateDeviceToken(int deviceId, Map<String, dynamic> payload) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/devices/$deviceId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteDeviceToken(int deviceId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/devices/$deviceId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/devices/$deviceId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -369,7 +456,7 @@ class ApiService {
   Future<Map<String, dynamic>> sendTestNotification(Map<String, dynamic> payload) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/notifications/test'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -378,14 +465,14 @@ class ApiService {
   // ============ Webhooks ============
 
   Future<List<dynamic>> getWebhooks() async {
-    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/'));
+    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/'), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> createWebhook(Map<String, dynamic> payload) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -394,14 +481,14 @@ class ApiService {
   Future<Map<String, dynamic>> updateWebhook(int webhookId, Map<String, dynamic> payload) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/$webhookId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteWebhook(int webhookId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/$webhookId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/$webhookId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -410,7 +497,7 @@ class ApiService {
   Future<Map<String, dynamic>> testWebhook(int webhookId) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/webhooks/test'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode({'webhook_id': webhookId}),
     );
     return _handleJsonResponse(response);
@@ -419,14 +506,14 @@ class ApiService {
   // ============ Scheduled Jobs ============
 
   Future<List<dynamic>> getScheduledJobs() async {
-    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/'));
+    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/'), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> createScheduledJob(Map<String, dynamic> payload) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -435,14 +522,14 @@ class ApiService {
   Future<Map<String, dynamic>> updateScheduledJob(int jobId, Map<String, dynamic> payload) async {
     final response = await _client.patch(
       Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/$jobId'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteScheduledJob(int jobId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/$jobId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/$jobId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -451,7 +538,7 @@ class ApiService {
   Future<Map<String, dynamic>> runScheduledJobNow(int jobId) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/schedules/$jobId/run'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode({}),
     );
     return _handleJsonResponse(response);
@@ -477,35 +564,35 @@ class ApiService {
     };
 
     final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/logs/').replace(queryParameters: queryParams);
-    final response = await _client.get(uri);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
   Future<List<dynamic>> getRecentErrors({int hours = 24, int limit = 50}) async {
     final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/logs/recent-errors')
         .replace(queryParameters: {'hours': '$hours', 'limit': '$limit'});
-    final response = await _client.get(uri);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> getLogStatistics({int hours = 24}) async {
     final uri = Uri.parse('${AppConfig.apiBaseUrl}/api/logs/statistics')
         .replace(queryParameters: {'hours': '$hours'});
-    final response = await _client.get(uri);
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
   // ============ Recordings ============
 
   Future<List<dynamic>> getRecordings() async {
-    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/recordings/'));
+    final response = await _client.get(Uri.parse('${AppConfig.apiBaseUrl}/api/recordings/'), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> startRecording(Map<String, dynamic> payload) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/recordings/'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
@@ -517,14 +604,14 @@ class ApiService {
   ) async {
     final response = await _client.post(
       Uri.parse('${AppConfig.apiBaseUrl}/api/recordings/$recordingId/stop'),
-      headers: {'Content-Type': 'application/json'},
+      headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
     return _handleJsonResponse(response);
   }
 
   Future<void> deleteRecording(int recordingId) async {
-    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/recordings/$recordingId'));
+    final response = await _client.delete(Uri.parse('${AppConfig.apiBaseUrl}/api/recordings/$recordingId'), headers: _buildHeaders(json: false));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(response.statusCode, response.body);
     }
@@ -536,7 +623,7 @@ class ApiService {
       {String? modelName, int limit = 100}) async {
     var url = '${AppConfig.resultsUrl(sessionId)}?limit=$limit';
     if (modelName != null) url += '&model_name=$modelName';
-    final response = await _client.get(Uri.parse(url));
+    final response = await _client.get(Uri.parse(url), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
@@ -577,6 +664,17 @@ class ApiService {
     return _handleJsonResponse(response);
   }
 
+  /// Update the current user's own profile (full_name, phone). Works for any
+  /// signed-in user; doesn't require admin.
+  Future<Map<String, dynamic>> updateMe(Map<String, dynamic> payload) async {
+    final response = await _client.patch(
+      Uri.parse(AppConfig.authMeUrl),
+      headers: _buildHeaders(),
+      body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
   Future<List<dynamic>> listUsers() async {
     final response = await _client.get(
       Uri.parse(AppConfig.authUsersUrl),
@@ -599,6 +697,45 @@ class ApiService {
       Uri.parse('${AppConfig.authUsersUrl}/$userId'),
       headers: _buildHeaders(),
       body: jsonEncode(payload),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<void> deleteUser(int userId) async {
+    final response = await _client.delete(
+      Uri.parse('${AppConfig.authUsersUrl}/$userId'),
+      headers: _buildHeaders(json: false),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(response.statusCode, response.body);
+    }
+  }
+
+  /// Returns the total number of users. Used by the login screen to detect
+  /// the first-admin bootstrap case.
+  Future<int> getUsersCount() async {
+    final users = await listUsers();
+    return users.length;
+  }
+
+  /// List users optionally filtered by role.
+  Future<List<dynamic>> listUsersFiltered({String? role}) async {
+    final uri = Uri.parse(AppConfig.authUsersUrl).replace(queryParameters: {
+      if (role != null && role.isNotEmpty) 'role': role,
+    });
+    final response = await _client.get(uri, headers: _buildHeaders(json: false));
+    return _handleJsonListResponse(response);
+  }
+
+  /// Change the currently-authenticated user's password.
+  Future<Map<String, dynamic>> changeMyPassword(String currentPassword, String newPassword) async {
+    final response = await _client.post(
+      Uri.parse('${AppConfig.authMeUrl}/password'),
+      headers: _buildHeaders(),
+      body: jsonEncode({
+        'current_password': currentPassword,
+        'new_password': newPassword,
+      }),
     );
     return _handleJsonResponse(response);
   }

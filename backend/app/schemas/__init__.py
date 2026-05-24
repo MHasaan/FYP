@@ -128,8 +128,10 @@ class PatientCreate(BaseModel):
     date_of_birth: Optional[date] = None
     gender: Optional[str] = None
     address: Optional[str] = None
-    fall_risk: bool = False
-    seizure_risk: bool = False
+    # Graded risk levels — 'none' / 'low' / 'medium' / 'high'. The frontend
+    # renders coloured pills based on these values across every screen.
+    fall_risk: str = "none"
+    seizure_risk: str = "none"
     risk_notes: Optional[str] = None
     primary_contact_name: Optional[str] = None
     primary_contact_phone: Optional[str] = None
@@ -143,8 +145,8 @@ class PatientUpdate(BaseModel):
     date_of_birth: Optional[date] = None
     gender: Optional[str] = None
     address: Optional[str] = None
-    fall_risk: Optional[bool] = None
-    seizure_risk: Optional[bool] = None
+    fall_risk: Optional[str] = None
+    seizure_risk: Optional[str] = None
     risk_notes: Optional[str] = None
     primary_contact_name: Optional[str] = None
     primary_contact_phone: Optional[str] = None

@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../services/api_service.dart';
@@ -12,14 +15,13 @@ import '../theme/app_theme.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/eldercare_card.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/gradient_orbs.dart';
 import '../widgets/incident_tile.dart';
 import '../widgets/patient_avatar.dart';
-import '../widgets/section_header.dart';
 import '../widgets/skeleton.dart';
 import '../widgets/stat_tile.dart';
 import '../widgets/status_pill.dart';
 
-/// Role-aware operations cockpit. Replaces the legacy ML pipeline tech-ops view.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -34,7 +36,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _loading = true;
   String? _error;
 
-  // KPIs
   int _unresolvedCount = 0;
   int _todayCount = 0;
   int _ackMinutesAvg = 0;
@@ -42,11 +43,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   int _runningCameras = 0;
   int _totalCameras = 0;
 
-  // Charts
   List<int> _trendByDay = List.filled(7, 0);
   Map<String, int> _byEventType = {'fall': 0, 'seizure': 0, 'manual': 0};
 
-  // Lists
   List<Map<String, dynamic>> _recentIncidents = [];
   List<Map<String, dynamic>> _patientsAtRisk = [];
 
@@ -93,14 +92,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final patients = (results[4] as List).cast<Map<String, dynamic>>();
       final instances = (results[5] as List).cast<Map<String, dynamic>>();
 
-      final last7 = ((last7Resp['items'] as List?) ?? const [])
-          .cast<Map<String, dynamic>>();
+      final last7 = ((last7Resp['items'] as List?) ?? const []).cast<Map<String, dynamic>>();
 
       final trend = List<int>.filled(7, 0);
       int falls = 0, seizures = 0;
       int ackTotalMins = 0, ackCount = 0;
       for (final inc in last7) {
-        final detected = DateTime.tryParse(inc['detected_at']?.toString() ?? '');
+        // detected_at is ISO 8601 UTC ("…Z"); convert to local so day buckets
+        // line up with the user's perception of "today" in their timezone.
+        final detected = DateTime.tryParse(inc['detected_at']?.toString() ?? '')?.toLocal();
         if (detected != null) {
           final dayIdx = 6 - now.difference(detected).inDays;
           if (dayIdx >= 0 && dayIdx < 7) trend[dayIdx]++;
@@ -167,198 +167,164 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final severity = theme.extension<IncidentSeverityColors>() ?? IncidentSeverityColors.light;
     final status = theme.extension<AppStatusColors>() ?? AppStatusColors.fallback;
 
-    final greeting = _greeting(auth.fullName);
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(0, 0, 0, 32),
-      children: [
-        SectionHeader(
-          title: greeting,
-          subtitle: _subtitleForRole(auth.role, _unresolvedCount),
-          icon: AppIcons.dashboard,
-          trailing: stream.isLive
-              ? const StatusPill(label: 'Live', kind: StatusKind.success, dense: true)
-              : const StatusPill(label: 'Polling', kind: StatusKind.warning, dense: true),
-        ),
-
-        if (_unresolvedCount > 0)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-            child: _AlertBanner(
-              count: _unresolvedCount,
-              onTap: () => _navigateToIncidents(context),
+    return RefreshIndicator(
+      color: AppTheme.brandTeal,
+      onRefresh: () async {
+        HapticFeedback.mediumImpact();
+        await _load();
+      },
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+            child: _HeroHeader(
+              greeting: _greeting(auth.fullName),
+              subtitle: _subtitleForRole(auth.role, _unresolvedCount),
+              isLive: stream.isLive,
+              unresolved: _unresolvedCount,
+              onTapAlerts: () => _navigateToIncidents(context),
             ),
           ),
 
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: LayoutBuilder(
-            builder: (_, c) {
-              final cols = c.maxWidth > 1180 ? 4 : c.maxWidth > 720 ? 2 : 1;
-              final width = (c.maxWidth - (cols - 1) * 12) / cols;
-              if (_loading) {
-                return Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: List.generate(
-                    4,
-                    (_) => SizedBox(width: width, child: const SkeletonBox(height: 124, radius: 16)),
-                  ),
+          // KPI grid
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+            sliver: SliverLayoutBuilder(
+              builder: (_, constraints) {
+                final w = constraints.crossAxisExtent;
+                final cols = w > 900 ? 4 : w > 540 ? 2 : 2;
+                return SliverGrid.count(
+                  crossAxisCount: cols,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  childAspectRatio: cols == 4 ? 1.4 : 1.25,
+                  children: _loading
+                      ? List.generate(4, (_) => const SkeletonBox(height: 140, radius: 18))
+                      : [
+                          StatTile(
+                            label: 'Unresolved alerts',
+                            value: '$_unresolvedCount',
+                            icon: AppIcons.incidents,
+                            accent: _unresolvedCount > 0 ? severity.critical : status.success,
+                            subtitle: _unresolvedCount > 0 ? 'Needs attention' : 'All clear',
+                            onTap: _unresolvedCount > 0 ? () => _navigateToIncidents(context) : null,
+                          ),
+                          StatTile(
+                            label: 'Alerts today',
+                            value: '$_todayCount',
+                            icon: AppIcons.alert,
+                            accent: AppTheme.brandTeal,
+                            subtitle: _todayCount == 0 ? 'No events yet' : 'Past 24 hours',
+                          ),
+                          StatTile(
+                            label: auth.isCareTeam ? 'Active patients' : 'Family overview',
+                            value: '$_activePatients',
+                            icon: AppIcons.patients,
+                            accent: AppTheme.brandSage,
+                            subtitle: _activePatients == 1 ? 'Profile' : 'Profiles',
+                          ),
+                          if (auth.isCareTeam)
+                            StatTile(
+                              label: 'Cameras live',
+                              value: '$_runningCameras / $_totalCameras',
+                              icon: AppIcons.cameras,
+                              accent: AppTheme.brandAmber,
+                              subtitle: _totalCameras == 0
+                                  ? 'None registered'
+                                  : '${(_runningCameras / (_totalCameras == 0 ? 1 : _totalCameras) * 100).toStringAsFixed(0)}% online',
+                            )
+                          else
+                            StatTile(
+                              label: 'Avg ack time',
+                              value: '${_ackMinutesAvg}m',
+                              icon: AppIcons.acknowledge,
+                              accent: AppTheme.brandSage,
+                              subtitle: 'Past 7 days',
+                            ),
+                        ]
+                          .animate(interval: 70.ms)
+                          .fade(duration: 350.ms)
+                          .slideY(begin: 0.1, duration: 380.ms, curve: Curves.easeOutCubic)
+                          .toList(),
                 );
-              }
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  SizedBox(
-                    width: width,
-                    child: StatTile(
-                      label: 'Unresolved alerts',
-                      value: '$_unresolvedCount',
-                      icon: AppIcons.incidents,
-                      accent: _unresolvedCount > 0 ? severity.critical : status.success,
-                      subtitle: _unresolvedCount > 0 ? 'Needs attention' : 'All clear',
-                      onTap: _unresolvedCount > 0 ? () => _navigateToIncidents(context) : null,
-                    ),
-                  ),
-                  SizedBox(
-                    width: width,
-                    child: StatTile(
-                      label: 'Alerts today',
-                      value: '$_todayCount',
-                      icon: AppIcons.alert,
-                      accent: cs.primary,
-                      subtitle: _todayCount == 0 ? 'No events yet' : 'Past 24 hours',
-                    ),
-                  ),
-                  SizedBox(
-                    width: width,
-                    child: StatTile(
-                      label: auth.isCareTeam ? 'Active patients' : 'Family overview',
-                      value: '$_activePatients',
-                      icon: AppIcons.patients,
-                      accent: cs.tertiary,
-                      subtitle: _activePatients == 1 ? 'Profile' : 'Profiles',
-                    ),
-                  ),
-                  if (auth.isCareTeam)
-                    SizedBox(
-                      width: width,
-                      child: StatTile(
-                        label: 'Cameras running',
-                        value: '$_runningCameras / $_totalCameras',
-                        icon: AppIcons.cameras,
-                        accent: status.info,
-                        subtitle: _totalCameras == 0
-                            ? 'None registered'
-                            : '${(_runningCameras / (_totalCameras == 0 ? 1 : _totalCameras) * 100).toStringAsFixed(0)}% live',
-                      ),
-                    )
-                  else
-                    SizedBox(
-                      width: width,
-                      child: StatTile(
-                        label: 'Avg ack time',
-                        value: '${_ackMinutesAvg}m',
-                        icon: AppIcons.acknowledge,
-                        accent: status.success,
-                        subtitle: 'Past 7 days',
-                      ),
-                    ),
-                ],
-              );
-            },
+              },
+            ),
           ),
-        ),
 
-        const SizedBox(height: 16),
+          // Trend chart
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: _TrendChart(
+                values: _trendByDay,
+                accent: AppTheme.brandTeal,
+                loading: _loading,
+              ),
+            ),
+          ),
 
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: LayoutBuilder(
-            builder: (_, c) {
-              final wide = c.maxWidth > 880;
-              final trend = _TrendChart(values: _trendByDay, accent: cs.primary, loading: _loading);
-              final breakdown = _BreakdownChart(
+          // Event-type breakdown
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: _BreakdownChart(
                 data: _byEventType,
                 colors: {
                   'fall': severity.critical,
                   'seizure': severity.high,
-                  'manual': cs.tertiary,
+                  'manual': AppTheme.brandAmber,
                 },
                 loading: _loading,
-              );
-              if (wide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 3, child: trend),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 2, child: breakdown),
-                  ],
-                );
-              }
-              return Column(children: [trend, const SizedBox(height: 12), breakdown]);
-            },
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: LayoutBuilder(
-            builder: (_, c) {
-              final wide = c.maxWidth > 980;
-              final recent = _RecentIncidents(
-                incidents: _recentIncidents,
-                loading: _loading,
-                onSeeAll: () => _navigateToIncidents(context),
-              );
-              final risk = _PatientsAtRisk(
-                patients: _patientsAtRisk,
-                loading: _loading,
-              );
-              if (wide) {
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 3, child: recent),
-                    const SizedBox(width: 12),
-                    Expanded(flex: 2, child: risk),
-                  ],
-                );
-              }
-              return Column(children: [recent, const SizedBox(height: 12), risk]);
-            },
-          ),
-        ),
-
-        if (!_backendOnline) ...[
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: EldercareCard(
-              child: Row(
-                children: [
-                  Icon(Icons.cloud_off_rounded, color: cs.error),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _error ?? 'Backend offline',
-                      style: theme.textTheme.bodyMedium?.copyWith(color: cs.error),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: _load,
-                    child: const Text('Retry'),
-                  ),
-                ],
               ),
             ),
           ),
+
+          // Recent incidents
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: _RecentIncidentsCard(
+                incidents: _recentIncidents,
+                loading: _loading,
+                onSeeAll: () => _navigateToIncidents(context),
+              ),
+            ),
+          ),
+
+          // Patients at risk
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              child: _PatientsAtRiskCard(
+                patients: _patientsAtRisk,
+                loading: _loading,
+              ),
+            ),
+          ),
+
+          if (!_backendOnline)
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                child: EldercareCard(
+                  child: Row(
+                    children: [
+                      Icon(Icons.cloud_off_rounded, color: cs.error),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _error ?? 'Backend offline',
+                          style: theme.textTheme.bodyMedium?.copyWith(color: cs.error),
+                        ),
+                      ),
+                      TextButton(onPressed: _load, child: const Text('Retry')),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
-      ],
+      ),
     );
   }
 
@@ -387,7 +353,193 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
-// ── Alert banner ────────────────────────────────────────────────────────────
+// ── Hero header ───────────────────────────────────────────────────────────────
+class _HeroHeader extends StatelessWidget {
+  final String greeting;
+  final String subtitle;
+  final bool isLive;
+  final int unresolved;
+  final VoidCallback onTapAlerts;
+
+  const _HeroHeader({
+    required this.greeting,
+    required this.subtitle,
+    required this.isLive,
+    required this.unresolved,
+    required this.onTapAlerts,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Container(
+          height: 250,
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFF01949A),
+                Color(0xFF3D8D7A),
+                Color(0xFF2A6B5E),
+              ],
+              stops: [0.0, 0.55, 1.0],
+            ),
+            borderRadius: BorderRadius.only(
+              bottomLeft: Radius.circular(28),
+              bottomRight: Radius.circular(28),
+            ),
+          ),
+        ),
+        const Positioned.fill(
+          child: ClipRRect(
+            borderRadius: BorderRadius.only(
+              bottomLeft: Radius.circular(28),
+              bottomRight: Radius.circular(28),
+            ),
+            child: SizedBox(height: 250),
+          ),
+        ),
+        ClipRRect(
+          borderRadius: const BorderRadius.only(
+            bottomLeft: Radius.circular(28),
+            bottomRight: Radius.circular(28),
+          ),
+          child: SizedBox(
+            height: 250,
+            width: double.infinity,
+            child: GradientOrbs.brand(),
+          ),
+        ),
+        SafeArea(
+          bottom: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _LivePulseDot(isLive: isLive),
+                          const SizedBox(width: 6),
+                          Text(
+                            isLive ? 'Live' : 'Polling',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 11,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  greeting,
+                  style: GoogleFonts.cormorantGaramond(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    height: 1.05,
+                    letterSpacing: -0.5,
+                  ),
+                )
+                    .animate()
+                    .fadeIn(duration: 400.ms)
+                    .slideX(begin: -0.1, duration: 500.ms, curve: Curves.easeOutCubic),
+                const SizedBox(height: 6),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.dmSans(
+                    fontSize: 13.5,
+                    color: Colors.white.withValues(alpha: 0.82),
+                    height: 1.45,
+                  ),
+                ).animate(delay: 150.ms).fadeIn(duration: 400.ms),
+                const SizedBox(height: 14),
+                if (unresolved > 0)
+                  _AlertBanner(count: unresolved, onTap: onTapAlerts)
+                      .animate(delay: 250.ms)
+                      .fadeIn(duration: 350.ms)
+                      .slideY(begin: 0.15, duration: 400.ms, curve: Curves.easeOutCubic),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LivePulseDot extends StatefulWidget {
+  final bool isLive;
+  const _LivePulseDot({required this.isLive});
+
+  @override
+  State<_LivePulseDot> createState() => _LivePulseDotState();
+}
+
+class _LivePulseDotState extends State<_LivePulseDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.isLive ? const Color(0xFF34D399) : const Color(0xFFFDE68A);
+    return SizedBox(
+      width: 14,
+      height: 14,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (widget.isLive)
+            AnimatedBuilder(
+              animation: _ctrl,
+              builder: (_, __) {
+                final t = _ctrl.value;
+                return Container(
+                  width: 8 + 6 * t,
+                  height: 8 + 6 * t,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.4 * (1 - t)),
+                    shape: BoxShape.circle,
+                  ),
+                );
+              },
+            ),
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _AlertBanner extends StatelessWidget {
   final int count;
   final VoidCallback onTap;
@@ -396,76 +548,61 @@ class _AlertBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final severity = theme.extension<IncidentSeverityColors>() ?? IncidentSeverityColors.light;
-    final color = severity.critical;
-
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [color, color.withValues(alpha: 0.85)],
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.mediumImpact();
+        onTap();
+      },
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.30)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFCB5AC).withValues(alpha: 0.35),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(AppIcons.incidents, color: Colors.white, size: 20),
             ),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: 0.25),
-                blurRadius: 16,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(AppIcons.incidents, color: Colors.white),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '$count unresolved alert${count == 1 ? '' : 's'}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 16,
-                      ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '$count unresolved alert${count == 1 ? '' : 's'}',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14.5,
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Tap to review and acknowledge.',
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        fontSize: 13,
-                      ),
+                  ),
+                  Text(
+                    'Tap to review',
+                    style: GoogleFonts.dmSans(
+                      color: Colors.white.withValues(alpha: 0.78),
+                      fontSize: 12,
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-              const Icon(Icons.arrow_forward_rounded, color: Colors.white),
-            ],
-          ),
+            ),
+            const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
+          ],
         ),
       ),
     );
   }
 }
 
-// ── Trend chart ─────────────────────────────────────────────────────────────
+// ── Trend chart card ──────────────────────────────────────────────────────────
 class _TrendChart extends StatelessWidget {
   final List<int> values;
   final Color accent;
@@ -485,21 +622,33 @@ class _TrendChart extends StatelessWidget {
             children: [
               Icon(AppIcons.trend, color: accent, size: 18),
               const SizedBox(width: 8),
-              Text('Alerts past 7 days',
-                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              Text(
+                'Alerts past 7 days',
+                style: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 16),
           SizedBox(
-            height: 180,
+            height: 170,
             child: loading
-                ? const SkeletonBox(height: 180, radius: 12)
+                ? const SkeletonBox(height: 170, radius: 12)
                 : LineChart(
                     LineChartData(
-                      gridData: const FlGridData(show: true, drawVerticalLine: false),
+                      gridData: FlGridData(
+                        show: true,
+                        drawVerticalLine: false,
+                        getDrawingHorizontalLine: (_) => FlLine(
+                          color: cs.outlineVariant.withValues(alpha: 0.5),
+                          strokeWidth: 1,
+                          dashArray: [4, 4],
+                        ),
+                      ),
                       borderData: FlBorderData(show: false),
                       titlesData: FlTitlesData(
-                        leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 28)),
+                        leftTitles: const AxisTitles(
+                          sideTitles: SideTitles(showTitles: true, reservedSize: 28),
+                        ),
                         rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         bottomTitles: AxisTitles(
@@ -512,8 +661,13 @@ class _TrendChart extends StatelessWidget {
                               if (i < 0 || i >= labels.length) return const SizedBox.shrink();
                               return Padding(
                                 padding: const EdgeInsets.only(top: 6),
-                                child: Text(labels[i],
-                                    style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant)),
+                                child: Text(
+                                  labels[i],
+                                  style: GoogleFonts.dmSans(
+                                    fontSize: 10,
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
                               );
                             },
                           ),
@@ -526,18 +680,29 @@ class _TrendChart extends StatelessWidget {
                       lineBarsData: [
                         LineChartBarData(
                           spots: [
-                            for (var i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i].toDouble()),
+                            for (var i = 0; i < values.length; i++)
+                              FlSpot(i.toDouble(), values[i].toDouble()),
                           ],
                           isCurved: true,
-                          color: accent,
-                          barWidth: 3,
-                          dotData: const FlDotData(show: true),
+                          gradient: LinearGradient(
+                            colors: [accent, AppTheme.brandSage],
+                          ),
+                          barWidth: 3.5,
+                          dotData: FlDotData(
+                            show: true,
+                            getDotPainter: (spot, _, __, ___) => FlDotCirclePainter(
+                              radius: 4,
+                              color: Colors.white,
+                              strokeWidth: 2.5,
+                              strokeColor: accent,
+                            ),
+                          ),
                           belowBarData: BarAreaData(
                             show: true,
                             gradient: LinearGradient(
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
-                              colors: [accent.withValues(alpha: 0.25), accent.withValues(alpha: 0.0)],
+                              colors: [accent.withValues(alpha: 0.30), accent.withValues(alpha: 0.0)],
                             ),
                           ),
                         ),
@@ -551,7 +716,7 @@ class _TrendChart extends StatelessWidget {
   }
 }
 
-// ── Breakdown chart ─────────────────────────────────────────────────────────
+// ── Breakdown chart card ──────────────────────────────────────────────────────
 class _BreakdownChart extends StatelessWidget {
   final Map<String, int> data;
   final Map<String, Color> colors;
@@ -561,45 +726,49 @@ class _BreakdownChart extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs = Theme.of(context).colorScheme;
     final total = data.values.fold<int>(0, (a, b) => a + b);
 
     return EldercareCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('By event type',
-              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 12),
+          Text(
+            'Event type breakdown',
+            style: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 15),
+          ),
+          const SizedBox(height: 16),
           SizedBox(
-            height: 180,
+            height: 170,
             child: loading
-                ? const SkeletonBox(height: 180, radius: 12)
+                ? const SkeletonBox(height: 170, radius: 12)
                 : (total == 0
                     ? Center(
-                        child: Text('No alerts in the past 7 days',
-                            style: TextStyle(color: cs.onSurfaceVariant)),
+                        child: Text(
+                          'No alerts in the past 7 days',
+                          style: GoogleFonts.dmSans(color: cs.onSurfaceVariant),
+                        ),
                       )
                     : Row(
                         children: [
                           Expanded(
                             child: PieChart(
                               PieChartData(
-                                sectionsSpace: 2,
+                                sectionsSpace: 3,
                                 centerSpaceRadius: 32,
+                                startDegreeOffset: -90,
                                 sections: data.entries.map((e) {
                                   final color = colors[e.key] ?? cs.primary;
                                   return PieChartSectionData(
                                     value: e.value.toDouble(),
                                     color: color,
                                     title: e.value == 0 ? '' : '${e.value}',
-                                    titleStyle: const TextStyle(
+                                    titleStyle: GoogleFonts.outfit(
                                       color: Colors.white,
                                       fontWeight: FontWeight.w800,
                                       fontSize: 12,
                                     ),
-                                    radius: 42,
+                                    radius: 44,
                                   );
                                 }).toList(),
                               ),
@@ -615,11 +784,21 @@ class _BreakdownChart extends StatelessWidget {
                                 padding: const EdgeInsets.symmetric(vertical: 4),
                                 child: Row(
                                   children: [
-                                    Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                                    Container(
+                                      width: 10,
+                                      height: 10,
+                                      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                                    ),
                                     const SizedBox(width: 8),
-                                    Text(_label(e.key), style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600)),
+                                    Text(
+                                      _label(e.key),
+                                      style: GoogleFonts.dmSans(fontWeight: FontWeight.w600, fontSize: 12.5),
+                                    ),
                                     const SizedBox(width: 6),
-                                    Text('· ${e.value}', style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+                                    Text(
+                                      '· ${e.value}',
+                                      style: GoogleFonts.dmSans(color: cs.onSurfaceVariant, fontSize: 12),
+                                    ),
                                   ],
                                 ),
                               );
@@ -633,23 +812,23 @@ class _BreakdownChart extends StatelessWidget {
     );
   }
 
-  String _label(String key) {
-    switch (key) {
+  String _label(String k) {
+    switch (k) {
       case 'fall': return 'Fall';
       case 'seizure': return 'Seizure';
       case 'manual': return 'Manual';
-      default: return key;
+      default: return k;
     }
   }
 }
 
-// ── Recent incidents ────────────────────────────────────────────────────────
-class _RecentIncidents extends StatelessWidget {
+// ── Recent incidents ──────────────────────────────────────────────────────────
+class _RecentIncidentsCard extends StatelessWidget {
   final List<Map<String, dynamic>> incidents;
   final bool loading;
   final VoidCallback onSeeAll;
 
-  const _RecentIncidents({
+  const _RecentIncidentsCard({
     required this.incidents,
     required this.loading,
     required this.onSeeAll,
@@ -657,20 +836,25 @@ class _RecentIncidents extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return EldercareCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(AppIcons.incidents, color: theme.colorScheme.primary, size: 18),
+              Icon(AppIcons.incidents, color: AppTheme.brandTeal, size: 18),
               const SizedBox(width: 8),
-              Text('Recent alerts',
-                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              Text(
+                'Recent alerts',
+                style: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
               const Spacer(),
               TextButton(
                 onPressed: onSeeAll,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.brandTeal,
+                  textStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
                 child: const Text('See all'),
               ),
             ],
@@ -681,14 +865,16 @@ class _RecentIncidents extends StatelessWidget {
               const Padding(padding: EdgeInsets.only(bottom: 8), child: SkeletonRow()),
           ] else if (incidents.isEmpty)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 36),
+              padding: const EdgeInsets.symmetric(vertical: 24),
               child: Center(
-                child: Text('No alerts yet — all quiet.',
-                    style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                child: Text(
+                  'No alerts yet — all quiet.',
+                  style: GoogleFonts.dmSans(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                ),
               ),
             )
           else
-            ...incidents.take(5).map((i) => Padding(
+            ...incidents.take(4).map((i) => Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: IncidentTile(incident: i),
                 )),
@@ -698,17 +884,16 @@ class _RecentIncidents extends StatelessWidget {
   }
 }
 
-// ── Patients at risk ────────────────────────────────────────────────────────
-class _PatientsAtRisk extends StatelessWidget {
+// ── Patients at risk ──────────────────────────────────────────────────────────
+class _PatientsAtRiskCard extends StatelessWidget {
   final List<Map<String, dynamic>> patients;
   final bool loading;
 
-  const _PatientsAtRisk({required this.patients, required this.loading});
+  const _PatientsAtRiskCard({required this.patients, required this.loading});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs = Theme.of(context).colorScheme;
     return EldercareCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -717,11 +902,13 @@ class _PatientsAtRisk extends StatelessWidget {
             children: [
               Icon(AppIcons.risk, color: cs.error, size: 18),
               const SizedBox(width: 8),
-              Text('Patients at risk',
-                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              Text(
+                'Patients at risk',
+                style: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 15),
+              ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           if (loading) ...[
             for (int i = 0; i < 3; i++)
               const Padding(padding: EdgeInsets.only(bottom: 8), child: SkeletonRow(height: 56)),
@@ -731,7 +918,7 @@ class _PatientsAtRisk extends StatelessWidget {
               child: EmptyState(
                 icon: AppIcons.patients,
                 title: 'No risk flags',
-                subtitle: 'Patients with elevated fall or seizure risk will appear here.',
+                subtitle: 'Patients with elevated fall or seizure risk appear here.',
               ),
             )
           else
@@ -739,29 +926,35 @@ class _PatientsAtRisk extends StatelessWidget {
               final fr = (p['fall_risk'] as String?) ?? 'none';
               final sr = (p['seizure_risk'] as String?) ?? 'none';
               return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.only(bottom: 10),
                 child: Row(
                   children: [
-                    PatientAvatar(name: p['full_name']?.toString(), size: 36),
+                    PatientAvatar(name: p['full_name']?.toString(), size: 40),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Text(
-                        p['full_name']?.toString() ?? 'Unknown',
-                        style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p['full_name']?.toString() ?? 'Unknown',
+                            style: GoogleFonts.outfit(fontWeight: FontWeight.w700, fontSize: 14),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: [
+                              if (fr != 'none')
+                                StatusPill(label: 'Fall: $fr', kind: StatusKind.danger, dense: true, icon: AppIcons.fall),
+                              if (sr != 'none')
+                                StatusPill(label: 'Seizure: $sr', kind: StatusKind.warning, dense: true, icon: AppIcons.seizure),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                    if (fr != 'none')
-                      Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: StatusPill(label: 'Fall: $fr', kind: StatusKind.danger, dense: true, icon: AppIcons.fall),
-                      ),
-                    if (sr != 'none')
-                      Padding(
-                        padding: const EdgeInsets.only(left: 6),
-                        child: StatusPill(label: 'Seizure: $sr', kind: StatusKind.warning, dense: true, icon: AppIcons.seizure),
-                      ),
                   ],
                 ),
               );

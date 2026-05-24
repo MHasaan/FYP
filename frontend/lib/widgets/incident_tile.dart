@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_icons.dart';
 import '../theme/app_theme.dart';
 import 'severity_pill.dart';
 import 'status_pill.dart';
 
-/// List row for incidents.
+/// Mobile-first incident tile.
+///
+/// Severity-coloured left stripe + soft glow on `new` incidents. The whole row
+/// is tappable; quick acknowledge/resolve actions are shown inline when the
+/// incident isn't resolved yet. Use within an `IncidentSwipeable` to add
+/// swipe-to-acknowledge / swipe-to-resolve.
 class IncidentTile extends StatelessWidget {
   final Map<String, dynamic> incident;
   final VoidCallback? onTap;
@@ -33,11 +40,15 @@ class IncidentTile extends StatelessWidget {
     return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
   }
 
+  String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final isLight = theme.brightness == Brightness.light;
     final colors = theme.extension<IncidentSeverityColors>() ?? IncidentSeverityColors.light;
+
     final severity = (incident['severity'] as String?) ?? 'medium';
     final stripeColor = colors.forSeverity(severity);
     final eventType = (incident['event_type'] as String?) ?? 'manual';
@@ -47,156 +58,201 @@ class IncidentTile extends StatelessWidget {
     final cameraName = incident['camera_name']?.toString() ??
         (incident['camera_config_id'] != null ? 'Camera #${incident['camera_config_id']}' : '—');
     final detectedAt = incident['detected_at'] as String?;
-    final confidence = incident['confidence'];
-    final threshold = incident['threshold'];
+    final isNew = status == 'new';
 
     return Material(
       color: Colors.transparent,
+      borderRadius: BorderRadius.circular(18),
       child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
+        onTap: () {
+          if (onTap != null) HapticFeedback.selectionClick();
+          onTap?.call();
+        },
+        borderRadius: BorderRadius.circular(18),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
           decoration: BoxDecoration(
-            color: selected ? cs.primaryContainer.withValues(alpha: 0.3) : cs.surface,
-            borderRadius: BorderRadius.circular(12),
+            color: selected
+                ? AppTheme.brandTeal.withValues(alpha: isLight ? 0.06 : 0.10)
+                : cs.surface,
+            borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: selected ? cs.primary : cs.outlineVariant,
-              width: selected ? 1.5 : 1,
+              color: selected
+                  ? AppTheme.brandTeal.withValues(alpha: 0.45)
+                  : cs.outlineVariant,
+              width: selected ? 1.5 : 1.0,
             ),
+            boxShadow: isNew
+                ? [
+                    BoxShadow(
+                      color: stripeColor.withValues(alpha: 0.16),
+                      blurRadius: 22,
+                      offset: const Offset(0, 6),
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: isLight ? 0.03 : 0.18),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
           ),
           child: IntrinsicHeight(
             child: Row(
               children: [
+                // Severity stripe
                 Container(
-                  width: 4,
+                  width: 5,
                   decoration: BoxDecoration(
-                    color: stripeColor,
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [stripeColor, stripeColor.withValues(alpha: 0.7)],
+                    ),
                     borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(12),
-                      bottomLeft: Radius.circular(12),
+                      topLeft: Radius.circular(18),
+                      bottomLeft: Radius.circular(18),
                     ),
                   ),
                 ),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.all(14),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: stripeColor.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Icon(
-                            AppIcons.forEventType(eventType),
-                            color: stripeColor,
-                            size: 22,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      patientName,
-                                      style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '· ${_capitalize(eventType)}',
-                                    style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(AppIcons.cameras, size: 12, color: cs.onSurfaceVariant),
-                                  const SizedBox(width: 4),
-                                  Flexible(
-                                    child: Text(
-                                      cameraName,
-                                      style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Icon(Icons.access_time_rounded, size: 12, color: cs.onSurfaceVariant),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    _formatTimeAgo(detectedAt),
-                                    style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                                  ),
-                                ],
-                              ),
-                              if (confidence != null) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Confidence: ${(confidence as num).toStringAsFixed(2)}'
-                                  '${threshold != null ? "  ·  threshold ${(threshold as num).toStringAsFixed(2)}" : ""}',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: cs.onSurfaceVariant,
-                                    fontFeatures: const [FontFeature.tabularFigures()],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        // Top row: icon + name + severity/status
+                        Row(
                           children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                SeverityPill(severity: severity, dense: true),
-                                const SizedBox(width: 6),
-                                StatusPill.forIncidentStatus(status),
-                              ],
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    stripeColor.withValues(alpha: 0.20),
+                                    stripeColor.withValues(alpha: 0.10),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: stripeColor.withValues(alpha: 0.28)),
+                              ),
+                              child: Icon(
+                                AppIcons.forEventType(eventType),
+                                color: stripeColor,
+                                size: 22,
+                              ),
                             ),
-                            if (status != 'resolved' && (onAcknowledge != null || onResolve != null)) ...[
-                              const SizedBox(height: 6),
-                              Row(
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  if (status == 'new' && onAcknowledge != null)
-                                    TextButton.icon(
-                                      onPressed: onAcknowledge,
-                                      icon: const Icon(AppIcons.acknowledge, size: 16),
-                                      label: const Text('Ack'),
-                                      style: TextButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        minimumSize: Size.zero,
-                                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                      ),
+                                  Text(
+                                    patientName,
+                                    style: GoogleFonts.outfit(
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 15,
+                                      color: cs.onSurface,
+                                      letterSpacing: -0.2,
                                     ),
-                                  if (onResolve != null)
-                                    TextButton.icon(
-                                      onPressed: onResolve,
-                                      icon: const Icon(AppIcons.resolve, size: 16),
-                                      label: const Text('Resolve'),
-                                      style: TextButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        minimumSize: Size.zero,
-                                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                      ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    _capitalize(eventType),
+                                    style: GoogleFonts.dmSans(
+                                      fontSize: 12.5,
+                                      color: stripeColor,
+                                      fontWeight: FontWeight.w600,
                                     ),
+                                  ),
                                 ],
                               ),
-                            ],
+                            ),
+                            const SizedBox(width: 8),
+                            SeverityPill(severity: severity, dense: true),
                           ],
                         ),
+                        const SizedBox(height: 12),
+                        // Meta row: camera + time + status
+                        Row(
+                          children: [
+                            Icon(AppIcons.cameras, size: 13, color: cs.onSurfaceVariant),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                cameraName,
+                                style: GoogleFonts.dmSans(
+                                  fontSize: 12,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Icon(Icons.access_time_rounded, size: 13, color: cs.onSurfaceVariant),
+                            const SizedBox(width: 4),
+                            Text(
+                              _formatTimeAgo(detectedAt),
+                              style: GoogleFonts.dmSans(
+                                fontSize: 12,
+                                color: cs.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const Spacer(),
+                            StatusPill.forIncidentStatus(status),
+                          ],
+                        ),
+                        // Quick actions for new/acknowledged
+                        if (status != 'resolved' && (onAcknowledge != null || onResolve != null)) ...[
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              if (status == 'new' && onAcknowledge != null)
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      HapticFeedback.lightImpact();
+                                      onAcknowledge!();
+                                    },
+                                    icon: const Icon(AppIcons.acknowledge, size: 14),
+                                    label: const Text('Acknowledge'),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: AppTheme.brandTeal,
+                                      side: BorderSide(color: AppTheme.brandTeal.withValues(alpha: 0.4)),
+                                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                      textStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 12),
+                                    ),
+                                  ),
+                                ),
+                              if (status == 'new' && onAcknowledge != null && onResolve != null)
+                                const SizedBox(width: 8),
+                              if (onResolve != null)
+                                Expanded(
+                                  child: FilledButton.icon(
+                                    onPressed: () {
+                                      HapticFeedback.lightImpact();
+                                      onResolve!();
+                                    },
+                                    icon: const Icon(AppIcons.resolve, size: 14),
+                                    label: const Text('Resolve'),
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: AppTheme.brandSage,
+                                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                      textStyle: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 12),
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -208,6 +264,4 @@ class IncidentTile extends StatelessWidget {
       ),
     );
   }
-
-  String _capitalize(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 }

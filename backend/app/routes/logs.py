@@ -7,7 +7,7 @@ Endpoints for querying and managing activity logs.
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
 from app.schemas import (
@@ -107,7 +107,7 @@ async def get_log_statistics(
 
     Returns counts by event type, severity, and source.
     """
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     logger = ActivityLogger(db)
 
@@ -183,7 +183,7 @@ async def cleanup_old_logs(
     from sqlalchemy import delete
     from app.models import ActivityLog
 
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Count logs to be deleted
     from sqlalchemy import select, func

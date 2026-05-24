@@ -53,7 +53,7 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend/app:/app/app
-      - ./videos:/videos:ro
+      - ./videos:/videos
       - ./backend/credentials:/app/credentials:ro
     depends_on:
       database:

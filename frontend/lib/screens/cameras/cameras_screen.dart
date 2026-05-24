@@ -1,17 +1,22 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/api_service.dart';
 import '../../services/auth_controller.dart';
 import '../../theme/app_icons.dart';
+import '../../theme/app_theme.dart';
 import '../../widgets/confirm_dialog.dart';
 import '../../widgets/eldercare_card.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_pill.dart';
+import '../videos/video_upload_screen.dart';
 import 'camera_form.dart';
 
 class CamerasScreen extends StatefulWidget {
@@ -27,19 +32,15 @@ class _CamerasScreenState extends State<CamerasScreen> {
   String? _error;
   List<Map<String, dynamic>> _cameras = [];
   Map<int, String> _patientNames = {};
-  // camera_config_id → instance map (most recent active instance, if any)
   Map<int, Map<String, dynamic>> _instancesByCamera = {};
   String _query = '';
   Timer? _statusRefresh;
-  // camera_config_id → "starting" / "stopping" while a control command is in flight
   final Set<int> _controlBusy = {};
 
   @override
   void initState() {
     super.initState();
     _load();
-    // Lightweight status refresh — keeps the Status pill accurate without
-    // the heavy full reload.
     _statusRefresh = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _refreshInstances(silent: true),
@@ -95,13 +96,9 @@ class _CamerasScreenState extends State<CamerasScreen> {
           _instancesByCamera = _indexInstancesByCamera(instances);
         });
       }
-    } catch (_) {
-      // Silent failure — periodic refresh shouldn't break the screen.
-    }
+    } catch (_) {}
   }
 
-  /// Pick the most recently-created instance per camera_config_id (an admin
-  /// could have multiple historical instances for the same camera).
   Map<int, Map<String, dynamic>> _indexInstancesByCamera(
       List<Map<String, dynamic>> instances) {
     final map = <int, Map<String, dynamic>>{};
@@ -113,7 +110,6 @@ class _CamerasScreenState extends State<CamerasScreen> {
         map[cid] = inst;
         continue;
       }
-      // Prefer running > paused > anything else; otherwise newest id wins.
       final newPriority = _statusPriority(inst['status'] as String?);
       final oldPriority = _statusPriority(existing['status'] as String?);
       if (newPriority > oldPriority) {
@@ -138,6 +134,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
   }
 
   Future<void> _openCreate() async {
+    HapticFeedback.lightImpact();
     final res = await CameraFormDialog.show(context);
     if (res == true) await _load();
   }
@@ -145,6 +142,14 @@ class _CamerasScreenState extends State<CamerasScreen> {
   Future<void> _openEdit(Map<String, dynamic> c) async {
     final res = await CameraFormDialog.show(context, existing: c);
     if (res == true) await _load();
+  }
+
+  Future<void> _openVideoUpload() async {
+    HapticFeedback.lightImpact();
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const VideoUploadScreen(),
+    ));
+    await _load();
   }
 
   Future<void> _delete(Map<String, dynamic> c) async {
@@ -175,21 +180,15 @@ class _CamerasScreenState extends State<CamerasScreen> {
     }
   }
 
-  /// Create a pipeline instance for this camera + start it. Used for cameras
-  /// that didn't have monitoring auto-started at creation time.
   Future<void> _startMonitoring(Map<String, dynamic> camera) async {
     final cameraId = (camera['id'] as num).toInt();
+    HapticFeedback.mediumImpact();
     setState(() => _controlBusy.add(cameraId));
     try {
-      // Re-use the camera's stored enabled_models, but filter out unwired ones.
-      final stored = (camera['enabled_models'] as List?)
-              ?.map((e) => e.toString())
-              .toList() ??
-          const <String>[];
+      final stored = (camera['enabled_models'] as List?)?.map((e) => e.toString()).toList() ?? const <String>[];
       final wired = stored.where(kWiredModels.contains).toList();
       final enabled = wired.isEmpty ? <String>['pose'] : wired;
 
-      // If an idle/stopped instance already exists for this camera, just start it.
       final existing = _instancesByCamera[cameraId];
       int instanceId;
       if (existing != null) {
@@ -207,9 +206,7 @@ class _CamerasScreenState extends State<CamerasScreen> {
       await _refreshInstances();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to start monitoring: $e'),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to start: $e')));
       }
     } finally {
       if (mounted) setState(() => _controlBusy.remove(cameraId));
@@ -220,15 +217,14 @@ class _CamerasScreenState extends State<CamerasScreen> {
     final cameraId = (camera['id'] as num).toInt();
     final instance = _instancesByCamera[cameraId];
     if (instance == null) return;
+    HapticFeedback.mediumImpact();
     setState(() => _controlBusy.add(cameraId));
     try {
       await _api.controlInstance((instance['id'] as num).toInt(), 'stop');
       await _refreshInstances();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to stop: $e'),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to stop: $e')));
       }
     } finally {
       if (mounted) setState(() => _controlBusy.remove(cameraId));
@@ -254,31 +250,61 @@ class _CamerasScreenState extends State<CamerasScreen> {
       children: [
         SectionHeader(
           title: 'Cameras',
-          subtitle: 'Register cameras and start fall / pose monitoring',
+          subtitle: 'Live feeds and uploaded videos',
           icon: AppIcons.cameras,
           trailing: canManage
-              ? FilledButton.icon(
+              ? IconButton.filled(
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppTheme.brandTeal,
+                    foregroundColor: Colors.white,
+                  ),
+                  tooltip: 'Add camera',
+                  icon: const Icon(AppIcons.add, size: 20),
                   onPressed: _openCreate,
-                  icon: const Icon(AppIcons.add, size: 18),
-                  label: const Text('Add camera'),
                 )
               : null,
         ),
+
+        // Action chips
+        if (canManage)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _ActionChip(
+                    label: 'Upload video',
+                    icon: Icons.video_file_rounded,
+                    accent: AppTheme.brandSage,
+                    onTap: _openVideoUpload,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _ActionChip(
+                    label: 'Add live source',
+                    icon: AppIcons.add,
+                    accent: AppTheme.brandTeal,
+                    onTap: _openCreate,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+        // Search
         Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
-          child: EldercareCard(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              onChanged: (v) => setState(() => _query = v),
-              decoration: const InputDecoration(
-                prefixIcon: Icon(AppIcons.search, size: 18),
-                hintText: 'Search by name, location, or group',
-                isDense: true,
-              ),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: TextField(
+            onChanged: (v) => setState(() => _query = v),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(AppIcons.search, size: 18),
+              hintText: 'Search by name, location, or group',
+              isDense: true,
             ),
           ),
         ),
-        const SizedBox(height: 8),
+
         Expanded(
           child: _loading
               ? const SkeletonList(count: 6)
@@ -287,11 +313,13 @@ class _CamerasScreenState extends State<CamerasScreen> {
                   : _cameras.isEmpty
                       ? EmptyState(
                           icon: AppIcons.cameras,
-                          title: 'No cameras registered',
-                          subtitle: 'Add your first camera to begin live monitoring.',
-                          actionLabel: canManage ? 'Add camera' : null,
-                          onAction: canManage ? _openCreate : null,
-                          actionIcon: AppIcons.add,
+                          title: 'No cameras yet',
+                          subtitle: canManage
+                              ? 'Add a live RTSP feed or upload a video to run detection.'
+                              : 'No cameras have been registered yet.',
+                          actionLabel: canManage ? 'Upload video' : null,
+                          onAction: canManage ? _openVideoUpload : null,
+                          actionIcon: Icons.video_file_rounded,
                         )
                       : filtered.isEmpty
                           ? const EmptyState(
@@ -299,30 +327,94 @@ class _CamerasScreenState extends State<CamerasScreen> {
                               title: 'No matches',
                               subtitle: 'Try a different search term.',
                             )
-                          : ListView.builder(
-                              padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                              itemCount: filtered.length,
-                              itemBuilder: (_, i) {
-                                final c = filtered[i];
-                                final pid = (c['patient_id'] as num?)?.toInt();
-                                final patient = pid == null ? null : _patientNames[pid];
-                                final cameraId = (c['id'] as num).toInt();
-                                final instance = _instancesByCamera[cameraId];
-                                return _CameraRow(
-                                  camera: c,
-                                  patientLabel: patient,
-                                  instance: instance,
-                                  canManage: canManage,
-                                  busy: _controlBusy.contains(cameraId),
-                                  onEdit: () => _openEdit(c),
-                                  onDelete: () => _delete(c),
-                                  onStart: () => _startMonitoring(c),
-                                  onStop: () => _stopMonitoring(c),
-                                );
+                          : RefreshIndicator(
+                              color: AppTheme.brandTeal,
+                              onRefresh: () async {
+                                HapticFeedback.mediumImpact();
+                                await _load();
                               },
+                              child: ListView.builder(
+                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                                itemCount: filtered.length,
+                                itemBuilder: (_, i) {
+                                  final c = filtered[i];
+                                  final pid = (c['patient_id'] as num?)?.toInt();
+                                  final patient = pid == null ? null : _patientNames[pid];
+                                  final cameraId = (c['id'] as num).toInt();
+                                  final instance = _instancesByCamera[cameraId];
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: _CameraRow(
+                                      camera: c,
+                                      patientLabel: patient,
+                                      instance: instance,
+                                      canManage: canManage,
+                                      busy: _controlBusy.contains(cameraId),
+                                      onEdit: () => _openEdit(c),
+                                      onDelete: () => _delete(c),
+                                      onStart: () => _startMonitoring(c),
+                                      onStop: () => _stopMonitoring(c),
+                                    ).animate()
+                                        .fadeIn(duration: 240.ms, delay: (i * 30).ms)
+                                        .slideY(begin: 0.05, duration: 300.ms),
+                                  );
+                                },
+                              ),
                             ),
         ),
       ],
+    );
+  }
+}
+
+class _ActionChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color accent;
+  final VoidCallback onTap;
+
+  const _ActionChip({
+    required this.label,
+    required this.icon,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            color: accent.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: accent.withValues(alpha: 0.30)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: accent, size: 18),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  style: GoogleFonts.outfit(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    color: accent,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -352,136 +444,171 @@ class _CameraRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
+    final cs = Theme.of(context).colorScheme;
     final source = camera['source_type']?.toString() ?? '—';
     final url = camera['source_url']?.toString() ?? '';
     final group = camera['group_name']?.toString();
     final location = camera['location']?.toString();
-
     final status = (instance?['status'] as String?)?.toLowerCase();
     final isRunning = status == 'running';
     final isPaused = status == 'paused';
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: EldercareCard(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isRunning
-                    ? cs.primary.withValues(alpha: 0.18)
-                    : cs.primaryContainer,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(
-                AppIcons.cameras,
-                color: isRunning ? cs.primary : cs.onPrimaryContainer,
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          camera['name']?.toString() ?? 'Camera',
-                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (instance != null)
-                        StatusPill.forPipelineStatus(instance!['status'] as String?)
-                      else
-                        const StatusPill(label: 'Not monitored', kind: StatusKind.neutral, dense: true),
-                    ],
+    return EldercareCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: isRunning
+                        ? [AppTheme.brandTeal.withValues(alpha: 0.25), AppTheme.brandSage.withValues(alpha: 0.18)]
+                        : [cs.surfaceContainerHighest, cs.surfaceContainerHighest],
                   ),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 4,
-                    children: [
-                      if (location != null && location.isNotEmpty)
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(AppIcons.location, size: 12, color: cs.onSurfaceVariant),
-                            const SizedBox(width: 4),
-                            Text(location, style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-                          ],
-                        ),
-                      if (group != null && group.isNotEmpty)
-                        Text('Group: $group', style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-                      if (patientLabel != null)
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(AppIcons.patients, size: 12, color: cs.tertiary),
-                            const SizedBox(width: 4),
-                            Text(patientLabel!,
-                                style: TextStyle(color: cs.tertiary, fontSize: 12, fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                    ],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isRunning ? AppTheme.brandTeal.withValues(alpha: 0.40) : cs.outlineVariant,
                   ),
-                  if (url.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                ),
+                child: Icon(
+                  AppIcons.cameras,
+                  color: isRunning ? AppTheme.brandTeal : cs.onSurfaceVariant,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Text(
-                      url,
-                      style: TextStyle(color: cs.onSurfaceVariant, fontSize: 11, fontFamily: 'monospace'),
+                      camera['name']?.toString() ?? 'Camera',
+                      style: GoogleFonts.outfit(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        color: cs.onSurface,
+                        letterSpacing: -0.2,
+                      ),
+                      maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    const SizedBox(height: 2),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        StatusPill(
+                          label: source.toUpperCase(),
+                          kind: StatusKind.info,
+                          dense: true,
+                        ),
+                        if (location != null && location.isNotEmpty)
+                          Text(location, style: GoogleFonts.dmSans(fontSize: 11.5, color: cs.onSurfaceVariant)),
+                        if (group != null && group.isNotEmpty)
+                          Text('· $group', style: GoogleFonts.dmSans(fontSize: 11.5, color: cs.onSurfaceVariant)),
+                      ],
+                    ),
                   ],
+                ),
+              ),
+              if (instance != null)
+                StatusPill.forPipelineStatus(instance!['status'] as String?)
+              else
+                const StatusPill(label: 'Idle', kind: StatusKind.neutral, dense: true),
+            ],
+          ),
+
+          if (patientLabel != null || url.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            if (patientLabel != null)
+              Row(
+                children: [
+                  Icon(AppIcons.patients, size: 12, color: AppTheme.brandSage),
+                  const SizedBox(width: 4),
+                  Text(
+                    patientLabel!,
+                    style: GoogleFonts.dmSans(
+                      fontSize: 12,
+                      color: AppTheme.brandSage,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ],
               ),
-            ),
-            const SizedBox(width: 12),
-            StatusPill(label: source.toUpperCase(), kind: StatusKind.info, dense: true),
-            if (canManage) ...[
-              const SizedBox(width: 6),
-              if (busy)
-                const SizedBox(
-                  width: 28,
-                  height: 28,
-                  child: Padding(
-                    padding: EdgeInsets.all(4),
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                )
-              else if (isRunning || isPaused)
-                IconButton(
-                  icon: const Icon(AppIcons.stop, size: 20),
-                  onPressed: onStop,
-                  tooltip: 'Stop monitoring',
-                  color: cs.error,
-                )
-              else
-                IconButton.filledTonal(
-                  icon: const Icon(AppIcons.start, size: 20),
-                  onPressed: onStart,
-                  tooltip: 'Start monitoring',
+            if (url.isNotEmpty) ...[
+              if (patientLabel != null) const SizedBox(height: 4),
+              Text(
+                url,
+                style: TextStyle(
+                  color: cs.onSurfaceVariant,
+                  fontSize: 11,
+                  fontFamily: 'monospace',
                 ),
-              IconButton(
-                icon: const Icon(AppIcons.edit, size: 18),
-                onPressed: onEdit,
-                tooltip: 'Edit',
-              ),
-              IconButton(
-                icon: const Icon(AppIcons.delete, size: 18),
-                onPressed: onDelete,
-                tooltip: 'Delete',
-                color: cs.error,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ],
-        ),
+
+          if (canManage) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                if (busy)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                else if (isRunning || isPaused)
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: onStop,
+                      icon: const Icon(AppIcons.stop, size: 16),
+                      label: const Text('Stop'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: cs.error,
+                        side: BorderSide(color: cs.error.withValues(alpha: 0.4)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: onStart,
+                      icon: const Icon(AppIcons.start, size: 16),
+                      label: const Text('Start'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppTheme.brandTeal,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                    ),
+                  ),
+                const SizedBox(width: 8),
+                IconButton.outlined(
+                  icon: const Icon(AppIcons.edit, size: 18),
+                  onPressed: onEdit,
+                  tooltip: 'Edit',
+                ),
+                IconButton.outlined(
+                  icon: Icon(AppIcons.delete, size: 18, color: cs.error),
+                  onPressed: onDelete,
+                  tooltip: 'Delete',
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }

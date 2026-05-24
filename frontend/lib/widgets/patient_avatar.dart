@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
-/// Circular avatar showing a patient's initials, with optional status ring.
+/// Circular avatar with deterministic gradient fill + initials.
+/// Each name maps to a unique two-tone gradient drawn from the brand palette.
 class PatientAvatar extends StatelessWidget {
   final String? name;
   final double size;
   final Color? ringColor;
   final IconData? overrideIcon;
+  final bool showShadow;
 
   const PatientAvatar({
     super.key,
@@ -13,6 +16,7 @@ class PatientAvatar extends StatelessWidget {
     this.size = 40,
     this.ringColor,
     this.overrideIcon,
+    this.showShadow = true,
   });
 
   String get _initials {
@@ -23,50 +27,66 @@ class PatientAvatar extends StatelessWidget {
     return (parts.first.substring(0, 1) + parts.last.substring(0, 1)).toUpperCase();
   }
 
-  Color _bgColor(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+  // Curated two-tone gradients keyed deterministically off the name.
+  static const List<List<Color>> _gradients = [
+    [Color(0xFF01949A), Color(0xFF3D8D7A)], // teal → sage
+    [Color(0xFFDC9750), Color(0xFFC2410C)], // amber → rust
+    [Color(0xFF3D8D7A), Color(0xFF2A6B5E)], // sage deep
+    [Color(0xFFFCB5AC), Color(0xFFDC9750)], // blush → amber
+    [Color(0xFF6366F1), Color(0xFF8B5CF6)], // indigo → violet
+    [Color(0xFF0EA5E9), Color(0xFF06B6D4)], // sky → cyan
+    [Color(0xFF14B8A6), Color(0xFF0F766E)], // teal range
+    [Color(0xFFEC4899), Color(0xFFBE185D)], // pink range
+  ];
+
+  List<Color> _gradient() {
     final n = (name ?? '').trim();
-    if (n.isEmpty) return cs.surfaceContainerHighest;
-    // Deterministic colour pick from a curated palette.
-    const palette = [
-      Color(0xFF0F766E), Color(0xFFB45309), Color(0xFF6366F1),
-      Color(0xFF7C3AED), Color(0xFF0369A1), Color(0xFF15803D),
-      Color(0xFFC2410C), Color(0xFF0E7490),
-    ];
+    if (n.isEmpty) return const [Color(0xFF8AADA6), Color(0xFF5F827B)];
     final hash = n.codeUnits.fold<int>(0, (a, b) => a + b);
-    return palette[hash % palette.length];
+    return _gradients[hash % _gradients.length];
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final bg = _bgColor(context);
-    final fg = bg.computeLuminance() < 0.5 ? Colors.white : cs.onSurface;
+    final colors = _gradient();
 
     final inner = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: bg.withValues(alpha: 0.18),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: colors,
+        ),
         shape: BoxShape.circle,
-        border: Border.all(color: bg.withValues(alpha: 0.45), width: 1),
+        boxShadow: showShadow
+            ? [
+                BoxShadow(
+                  color: colors.first.withValues(alpha: 0.32),
+                  blurRadius: size * 0.3,
+                  offset: Offset(0, size * 0.1),
+                ),
+              ]
+            : null,
       ),
       alignment: Alignment.center,
       child: overrideIcon != null
-          ? Icon(overrideIcon, color: bg, size: size * 0.5)
+          ? Icon(overrideIcon, color: Colors.white, size: size * 0.5)
           : Text(
               _initials,
-              style: TextStyle(
-                color: fg.withValues(alpha: 0.9),
+              style: GoogleFonts.outfit(
+                color: Colors.white,
                 fontWeight: FontWeight.w700,
                 fontSize: size * 0.38,
+                letterSpacing: 0.3,
               ),
             ),
     );
 
     if (ringColor == null) return inner;
     return Container(
-      padding: const EdgeInsets.all(2),
+      padding: const EdgeInsets.all(2.5),
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(color: ringColor!, width: 2),

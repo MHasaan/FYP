@@ -1,7 +1,12 @@
 import 'dart:convert';
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../services/api_service.dart';
@@ -191,90 +196,108 @@ class _ReportsScreenState extends State<ReportsScreen> {
           title: 'Reports',
           subtitle: 'Incident history and trends',
           icon: AppIcons.reports,
-          trailing: Wrap(
-            spacing: 6,
-            children: [
-              OutlinedButton.icon(
-                onPressed: _exportJson,
-                icon: const Icon(AppIcons.export, size: 16),
-                label: const Text('JSON'),
+          trailing: PopupMenuButton<String>(
+            tooltip: 'Export',
+            icon: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppTheme.brandTeal.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
               ),
-              OutlinedButton.icon(
-                onPressed: _exportCsv,
-                icon: const Icon(AppIcons.export, size: 16),
-                label: const Text('CSV'),
+              child: Icon(AppIcons.export, color: AppTheme.brandTeal, size: 18),
+            ),
+            onSelected: (v) {
+              HapticFeedback.lightImpact();
+              if (v == 'json') _exportJson();
+              if (v == 'csv') _exportCsv();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'csv',
+                child: Row(children: [
+                  Icon(AppIcons.export, size: 16, color: AppTheme.brandSage),
+                  const SizedBox(width: 10),
+                  const Text('Export as CSV'),
+                ]),
+              ),
+              PopupMenuItem(
+                value: 'json',
+                child: Row(children: [
+                  Icon(AppIcons.export, size: 16, color: AppTheme.brandSage),
+                  const SizedBox(width: 10),
+                  const Text('Export as JSON'),
+                ]),
               ),
             ],
           ),
         ),
-        // Filter bar
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
-          child: EldercareCard(
-            padding: const EdgeInsets.all(12),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (isCareTeam)
-                  SizedBox(
-                    width: 220,
-                    child: DropdownButtonFormField<int?>(
-                      value: _patientFilter,
-                      decoration: const InputDecoration(labelText: 'Patient', isDense: true),
-                      items: [
-                        const DropdownMenuItem<int?>(value: null, child: Text('All patients')),
-                        ..._patients.map((p) => DropdownMenuItem<int?>(
-                              value: (p['id'] as num).toInt(),
-                              child: Text(p['full_name']?.toString() ?? 'Patient #${p['id']}'),
-                            )),
-                      ],
-                      onChanged: (v) => setState(() => _patientFilter = v),
-                    ),
+
+        // Filter row — horizontal scroll on narrow screens
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: Row(
+            children: [
+              if (isCareTeam) ...[
+                SizedBox(
+                  width: 200,
+                  child: DropdownButtonFormField<int?>(
+                    value: _patientFilter,
+                    decoration: const InputDecoration(labelText: 'Patient', isDense: true),
+                    items: [
+                      const DropdownMenuItem<int?>(value: null, child: Text('All patients')),
+                      ..._patients.map((p) => DropdownMenuItem<int?>(
+                            value: (p['id'] as num).toInt(),
+                            child: Text(p['full_name']?.toString() ?? 'Patient #${p['id']}'),
+                          )),
+                    ],
+                    onChanged: (v) => setState(() => _patientFilter = v),
                   ),
-                if (isCareTeam)
-                  SizedBox(
-                    width: 220,
-                    child: DropdownButtonFormField<int?>(
-                      value: _cameraFilter,
-                      decoration: const InputDecoration(labelText: 'Camera', isDense: true),
-                      items: [
-                        const DropdownMenuItem<int?>(value: null, child: Text('All cameras')),
-                        ..._cameras.map((c) => DropdownMenuItem<int?>(
-                              value: (c['id'] as num).toInt(),
-                              child: Text(c['name']?.toString() ?? 'Camera #${c['id']}'),
-                            )),
-                      ],
-                      onChanged: (v) => setState(() => _cameraFilter = v),
-                    ),
+                ),
+                const SizedBox(width: 10),
+                SizedBox(
+                  width: 200,
+                  child: DropdownButtonFormField<int?>(
+                    value: _cameraFilter,
+                    decoration: const InputDecoration(labelText: 'Camera', isDense: true),
+                    items: [
+                      const DropdownMenuItem<int?>(value: null, child: Text('All cameras')),
+                      ..._cameras.map((c) => DropdownMenuItem<int?>(
+                            value: (c['id'] as num).toInt(),
+                            child: Text(c['name']?.toString() ?? 'Camera #${c['id']}'),
+                          )),
+                    ],
+                    onChanged: (v) => setState(() => _cameraFilter = v),
                   ),
-                OutlinedButton.icon(
-                  onPressed: _pickRange,
-                  icon: const Icon(AppIcons.calendar, size: 16),
-                  label: Text('${_fmt(_range.start)} → ${_fmt(_range.end)}'),
                 ),
-                FilledButton.icon(
-                  onPressed: _loading ? null : _generate,
-                  icon: const Icon(AppIcons.chart, size: 16),
-                  label: Text(_loading ? 'Generating…' : 'Generate'),
-                ),
+                const SizedBox(width: 10),
               ],
-            ),
+              OutlinedButton.icon(
+                onPressed: _pickRange,
+                icon: const Icon(AppIcons.calendar, size: 16),
+                label: Text('${_fmt(_range.start)} → ${_fmt(_range.end)}'),
+              ),
+              const SizedBox(width: 10),
+              FilledButton.icon(
+                onPressed: _loading ? null : () { HapticFeedback.lightImpact(); _generate(); },
+                icon: const Icon(AppIcons.chart, size: 16),
+                label: Text(_loading ? 'Generating…' : 'Generate'),
+                style: FilledButton.styleFrom(backgroundColor: AppTheme.brandTeal),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 12),
         Expanded(
           child: _loading
               ? const SkeletonList(count: 5)
               : _error != null
                   ? Center(child: Text(_error!, style: TextStyle(color: cs.error)))
                   : ListView(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                       children: [
                         // KPI tiles
                         LayoutBuilder(builder: (_, c) {
-                          final cols = c.maxWidth > 900 ? 4 : (c.maxWidth > 560 ? 2 : 1);
+                          final cols = c.maxWidth > 900 ? 4 : 2;
                           final tileWidth = (c.maxWidth - (cols - 1) * 12) / cols;
                           return Wrap(
                             spacing: 12,
@@ -352,6 +375,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  /// Round up to the next "nice" power-of-10 boundary so chart axis labels are
+  /// readable: 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, etc.
+  static double _niceMax(int dataMax) {
+    if (dataMax <= 0) return 5;
+    final magnitude = math.pow(10, (math.log(dataMax) / math.ln10).floor()).toDouble();
+    final normalized = dataMax / magnitude;
+    final niceNormalized = normalized <= 1 ? 1.0 : normalized <= 2 ? 2.0 : normalized <= 5 ? 5.0 : 10.0;
+    return niceNormalized * magnitude;
+  }
+
   Widget _buildBarChart(
     BuildContext context, {
     required String title,
@@ -361,7 +394,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final entries = data.entries.toList();
-    final maxY = entries.isEmpty ? 1.0 : entries.map((e) => e.value).reduce((a, b) => a > b ? a : b).toDouble().clamp(1.0, double.infinity);
+    final dataMax = entries.isEmpty ? 0 : entries.map((e) => e.value).reduce((a, b) => a > b ? a : b);
+    final maxY = _niceMax(dataMax);
+    final interval = maxY / 4;  // 4 horizontal grid lines + label per chart
 
     return EldercareCard(
       child: Column(
@@ -370,16 +405,47 @@ class _ReportsScreenState extends State<ReportsScreen> {
           Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 12),
           SizedBox(
-            height: 180,
-            child: entries.isEmpty
+            height: 200,
+            child: entries.isEmpty || dataMax == 0
                 ? Center(child: Text('No data', style: TextStyle(color: cs.onSurfaceVariant)))
                 : BarChart(
                     BarChartData(
-                      gridData: FlGridData(show: true, drawVerticalLine: false, horizontalInterval: (maxY / 4).ceilToDouble()),
+                      maxY: maxY,
+                      minY: 0,
+                      alignment: BarChartAlignment.spaceAround,
+                      gridData: FlGridData(
+                        show: true,
+                        drawVerticalLine: false,
+                        horizontalInterval: interval,
+                        getDrawingHorizontalLine: (_) => FlLine(
+                          color: cs.outlineVariant.withValues(alpha: 0.4),
+                          strokeWidth: 1,
+                          dashArray: [4, 4],
+                        ),
+                      ),
                       borderData: FlBorderData(show: false),
                       titlesData: FlTitlesData(
                         leftTitles: AxisTitles(
-                          sideTitles: SideTitles(showTitles: true, reservedSize: 28),
+                          sideTitles: SideTitles(
+                            showTitles: true,
+                            reservedSize: 40,
+                            interval: interval,
+                            getTitlesWidget: (value, meta) {
+                              // Only render labels that align with the grid lines,
+                              // so they don't pile up on top of each other.
+                              if ((value % interval).abs() > 0.01 && value != maxY) {
+                                return const SizedBox.shrink();
+                              }
+                              return Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: Text(
+                                  value.toInt().toString(),
+                                  style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+                                  textAlign: TextAlign.right,
+                                ),
+                              );
+                            },
+                          ),
                         ),
                         rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),

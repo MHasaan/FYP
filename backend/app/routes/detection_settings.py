@@ -17,12 +17,10 @@ from app.services.auth_service import get_current_user, require_roles
 router = APIRouter(prefix="/api/detection-settings", tags=["Detection Settings"])
 
 
-def _validate_target(camera_config_id: Optional[int], patient_id: Optional[int]):
-    if camera_config_id is None and patient_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="camera_config_id or patient_id is required",
-        )
+# A detection setting with both camera_config_id and patient_id NULL is the
+# *global default* — it applies to anything that doesn't have a per-patient or
+# per-camera override. Only one global rule is meaningful at a time, so on
+# creation we update the existing one rather than spawning duplicates.
 
 
 @router.get("/", response_model=list[DetectionSettingResponse])
@@ -49,9 +47,28 @@ async def create_detection_setting(
     _: UserAccount = Depends(require_roles("admin", "caregiver")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create detector settings for a camera or patient."""
+    """Create detector settings for a camera, patient, or global default."""
     data = payload.model_dump()
-    _validate_target(data.get("camera_config_id"), data.get("patient_id"))
+    camera_id = data.get("camera_config_id")
+    patient_id = data.get("patient_id")
+
+    # Global rule (both null): upsert — update the existing one if there is
+    # one, otherwise create. Avoids accidental duplicates.
+    if camera_id is None and patient_id is None:
+        existing = await db.execute(
+            select(DetectionSetting).where(
+                DetectionSetting.camera_config_id.is_(None),
+                DetectionSetting.patient_id.is_(None),
+            ).limit(1)
+        )
+        existing_row = existing.scalar_one_or_none()
+        if existing_row is not None:
+            for key, value in data.items():
+                setattr(existing_row, key, value)
+            await db.commit()
+            await db.refresh(existing_row)
+            return existing_row
+
     setting = DetectionSetting(**data)
     db.add(setting)
     await db.commit()
@@ -73,9 +90,6 @@ async def update_detection_setting(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detection setting not found")
 
     updates = payload.model_dump(exclude_unset=True)
-    next_camera_id = updates.get("camera_config_id", setting.camera_config_id)
-    next_patient_id = updates.get("patient_id", setting.patient_id)
-    _validate_target(next_camera_id, next_patient_id)
 
     for key, value in updates.items():
         setattr(setting, key, value)

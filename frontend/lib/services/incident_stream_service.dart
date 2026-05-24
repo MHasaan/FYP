@@ -158,13 +158,27 @@ class IncidentStreamService extends ChangeNotifier {
 
   void _addEvent(Map<String, dynamic> evt) {
     final id = evt['id'];
-    _recent.removeWhere((e) => e['id'] == id);
+    // Capture the prior version's status (if any) BEFORE we replace it, so we
+    // can adjust the unresolved count correctly on re-emits (reconnect,
+    // polling-then-WS, etc) without double-counting.
+    final priorIdx = _recent.indexWhere((e) => e['id'] == id);
+    final priorStatus = priorIdx >= 0 ? (_recent[priorIdx]['status'] as String?) : null;
+
+    if (priorIdx >= 0) _recent.removeAt(priorIdx);
     _recent.insert(0, evt);
     if (_recent.length > 20) _recent.removeRange(20, _recent.length);
-    final status = (evt['status'] as String?) ?? 'new';
-    if (status == 'new') {
+
+    final newStatus = (evt['status'] as String?) ?? 'new';
+    final wasNew = priorStatus == 'new';
+    final isNew = newStatus == 'new';
+    if (!wasNew && isNew) {
       _unresolvedCount += 1;
+    } else if (wasNew && !isNew && _unresolvedCount > 0) {
+      _unresolvedCount -= 1;
     }
+    // wasNew == isNew == true → no change (the more important fix)
+    // priorStatus == null && isNew → first time we see this, +1 (handled above)
+
     _eventController.add(evt);
     notifyListeners();
   }

@@ -105,20 +105,48 @@ async def me(user: UserAccount = Depends(get_current_user)):
     return user
 
 
-@router.post("/logout")
-async def logout(
-    payload: dict,
+@router.patch("/me", response_model=UserResponse)
+async def update_me(
+    payload: UserUpdate,
     user: UserAccount = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke the current token."""
-    raw_token = payload.get("access_token")
+    """Update the current user's own profile.
+
+    Users can edit `full_name` and `phone`. Privileged fields (`role`,
+    `is_active`, `password`) are stripped — those require admin (`PATCH
+    /users/{id}`) or the dedicated `/me/password` route.
+    """
+    updates = payload.model_dump(exclude_unset=True)
+    # Don't let users escalate themselves via this endpoint.
+    for forbidden in ("role", "is_active", "password"):
+        updates.pop(forbidden, None)
+
+    for key, value in updates.items():
+        setattr(user, key, value)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.post("/logout")
+async def logout(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke the current token.
+
+    Intentionally does NOT require `get_current_user` — a client should be able
+    to log out cleanly even after its token has expired. We look up the token
+    directly and revoke if it exists and isn't already revoked. Always returns
+    200 so the client UX is the same regardless of token validity.
+    """
+    raw_token = payload.get("access_token") if isinstance(payload, dict) else None
     if not raw_token:
         return {"status": "ok"}
 
     result = await db.execute(
         select(AuthToken).where(
-            AuthToken.user_id == user.id,
             AuthToken.token_hash == hash_token(raw_token),
             AuthToken.revoked_at.is_(None),
         )

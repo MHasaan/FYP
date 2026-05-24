@@ -57,10 +57,19 @@ async def create_patient(
     user: UserAccount = Depends(require_roles("admin", "caregiver")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a patient profile with risk and contact details."""
+    """Create a patient profile with risk and contact details.
+
+    Only admins can assign caregiver_id / relative_user_id — caregivers are
+    auto-assigned to themselves and can't pin patients to other caregivers or
+    relatives, which would otherwise be a privilege-escalation path matching
+    the same restriction we apply in update_patient.
+    """
     data = payload.model_dump()
-    if user.role == "caregiver" and not data.get("caregiver_id"):
+    if user.role == "caregiver":
+        # Force caregiver_id to self; ignore any client-supplied value.
         data["caregiver_id"] = user.id
+        # Caregivers may not assign relatives at all — admin-only field.
+        data.pop("relative_user_id", None)
 
     patient = PatientProfile(**data)
     db.add(patient)

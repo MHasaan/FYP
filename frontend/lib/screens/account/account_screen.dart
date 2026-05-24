@@ -25,22 +25,22 @@ class AccountScreen extends StatelessWidget {
           icon: AppIcons.account,
         ),
         Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
+          padding: EdgeInsets.symmetric(horizontal: 20),
           child: _ProfileCard(),
         ),
         SizedBox(height: 16),
         Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
+          padding: EdgeInsets.symmetric(horizontal: 20),
           child: _PasswordCard(),
         ),
         SizedBox(height: 16),
         Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
+          padding: EdgeInsets.symmetric(horizontal: 20),
           child: _NotificationsCard(),
         ),
         SizedBox(height: 16),
         Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24),
+          padding: EdgeInsets.symmetric(horizontal: 20),
           child: _SessionCard(),
         ),
       ],
@@ -90,7 +90,9 @@ class _ProfileCardState extends State<_ProfileCard> {
       _success = null;
     });
     try {
-      await ApiService().updateUser(id, {
+      // Use /api/auth/me — works for any signed-in user (admin/caregiver/relative).
+      // The /users/{id} route is admin-only and would 403 here for non-admins.
+      await ApiService().updateMe({
         'full_name': _name.text.trim(),
         'phone': _phone.text.trim().isEmpty ? null : _phone.text.trim(),
       });

@@ -489,8 +489,12 @@ async def update_pipeline_instance(
             detail=f"Pipeline instance {instance_id} not found"
         )
 
-    if update_data.name:
-        instance.name = update_data.name
+    # Iterate over all set fields rather than hard-coding `name`, so the
+    # schema and route stay in sync (previously enabled_models/model_configs
+    # were silently dropped here).
+    updates = update_data.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        setattr(instance, key, value)
 
     await db.commit()
     await db.refresh(instance)

@@ -8,6 +8,7 @@ class StorageService extends ChangeNotifier {
   static const String _cameraHistoryKey = 'camera_history';
   static const String _authTokenKey = 'auth_token';
   static const String _authUserKey = 'auth_user';
+  static const String _deviceTokenIdKey = 'device_token_id';
 
   late SharedPreferences _prefs;
 
@@ -29,6 +30,11 @@ class StorageService extends ChangeNotifier {
   String get authEmail => (_authUser?['email'] as String?) ?? '';
   bool get hasAuthSession => _authToken != null && _authToken!.isNotEmpty;
 
+  /// Backend-side ID of this device's push token registration. Null until the
+  /// device has been registered with the notifications service.
+  int? _deviceTokenId;
+  int? get deviceTokenId => _deviceTokenId;
+
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
 
@@ -42,6 +48,7 @@ class StorageService extends ChangeNotifier {
     _cameraHistory = _prefs.getStringList(_cameraHistoryKey) ?? [];
 
     _authToken = _prefs.getString(_authTokenKey);
+    _deviceTokenId = _prefs.getInt(_deviceTokenIdKey);
     final rawUser = _prefs.getString(_authUserKey);
     if (rawUser != null && rawUser.isNotEmpty) {
       try {
@@ -106,5 +113,15 @@ class StorageService extends ChangeNotifier {
     notifyListeners();
     await _prefs.remove(_authTokenKey);
     await _prefs.remove(_authUserKey);
+  }
+
+  Future<void> setDeviceTokenId(int? id) async {
+    _deviceTokenId = id;
+    notifyListeners();
+    if (id == null) {
+      await _prefs.remove(_deviceTokenIdKey);
+    } else {
+      await _prefs.setInt(_deviceTokenIdKey, id);
+    }
   }
 }
