@@ -68,14 +68,37 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Install GroundingDINO. The source ships its own setup.py that compiles
 # the custom CUDA op MultiScaleDeformableAttention at install time.
-# TORCH_CUDA_ARCH_LIST covers common consumer GPUs; bump if you have
-# something exotic (RTX 5000-series uses 12.0). PTX gives forward compat.
-# Narrowed to your RTX 2060 (compute 7.5) only — faster compile and the
-# image won't be portable to other arches anyway. Bump this list if you
-# move to a different GPU.
-ENV TORCH_CUDA_ARCH_LIST="7.5"
+#
+# TORCH_CUDA_ARCH_LIST controls which GPU architectures the custom op is
+# compiled for. The default below covers every common NVIDIA consumer/
+# datacenter GPU from Volta (V100) through Hopper (H100), plus PTX for
+# forward-compat with future arches. This makes the resulting image
+# portable across machines — at the cost of a longer compile.
+#
+# Compute capabilities cheatsheet:
+#   7.0  V100
+#   7.5  T4, RTX 2060/2070/2080 (incl. SUPER variants)
+#   8.0  A100
+#   8.6  RTX 3060/3070/3080/3090
+#   8.9  RTX 4060/4070/4080/4090
+#   9.0  H100
+#
+# To shrink build time on a single-GPU machine, override at build time:
+#   docker compose build --build-arg TORCH_CUDA_ARCH_LIST="7.5" ml_manager
+ARG TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 ENV CUDA_HOME=/usr/local/cuda
-COPY GroundingDINO/ ./GroundingDINO/
+
+# Clone GroundingDINO from upstream at a pinned commit. Doing this inside
+# the build (instead of COPY-ing from the host) means a fresh-clone PC
+# can build the image without first manually cloning IDEA-Research/GroundingDINO.
+# Pinned commit is the same revision the project was developed against.
+ARG GROUNDINGDINO_COMMIT=856dde20aee659246248e20734ef9ba5214f5e44
+RUN git clone https://github.com/IDEA-Research/GroundingDINO.git ./GroundingDINO && \
+    cd ./GroundingDINO && \
+    git checkout ${GROUNDINGDINO_COMMIT} && \
+    rm -rf .git
+
 # --no-build-isolation: GroundingDINO's setup.py imports torch at build time.
 # PEP 517 build isolation hides our installed torch from the build venv,
 # and setup.py then naively runs `pip install torch` (no cu118 index) which

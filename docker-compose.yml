@@ -71,11 +71,19 @@ services:
   # ============================================
   ml_manager:
     build:
-      # Context is the repo root so the Dockerfile can COPY both
-      # ml_manager/ AND GroundingDINO/. GroundingDINO has to be in the
-      # build context to compile its custom CUDA op at image-build time.
+      # Context is the repo root so the Dockerfile can COPY the ml_manager
+      # tree. GroundingDINO is cloned from upstream inside the Dockerfile,
+      # so no GroundingDINO/ directory is needed in the build context.
       context: .
       dockerfile: ml_manager/Dockerfile
+      args:
+        # Override on a single-GPU dev machine to shrink build time, e.g.:
+        #   TORCH_CUDA_ARCH_LIST=7.5      (RTX 2060/2070/2080)
+        #   TORCH_CUDA_ARCH_LIST=8.6      (RTX 3060/3070/3080/3090)
+        #   TORCH_CUDA_ARCH_LIST=8.9      (RTX 4060/4070/4080/4090)
+        # The default below covers every common arch — keeps the image
+        # portable but adds a few minutes to the GroundingDINO compile.
+        TORCH_CUDA_ARCH_LIST: ${TORCH_CUDA_ARCH_LIST:-7.0;7.5;8.0;8.6;8.9;9.0+PTX}
     container_name: fyp-ml-manager
     restart: unless-stopped
     env_file: .env
@@ -92,11 +100,10 @@ services:
       - ./ml_manager/models:/app/models
       - ./videos:/videos
       - ./ml_manager/cache:/root/.cache
-      # Mount the GroundingDINO source tree read-only so the loader can
-      # import its modules without needing a separate pip install. The
-      # custom CUDA op still requires `pip install -e` to compile —
-      # see gdino_loader.py.
-      - ./GroundingDINO:/app/GroundingDINO:ro
+      # NOTE: GroundingDINO is now cloned + installed inside the image at
+      # build time (see ml_manager/Dockerfile). No host-side ./GroundingDINO
+      # mount — that used to mask the image's copy with an empty dir on
+      # fresh-clone machines.
     depends_on:
       redis:
         condition: service_healthy
