@@ -403,24 +403,60 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
+/// Risk picker — 4 mutually exclusive pills laid out in a Wrap so they
+/// don't squish to vertical text on narrow phones (SegmentedButton can't
+/// gracefully shrink). Colour-codes selection by severity.
 class _RiskSegmented extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
   const _RiskSegmented({required this.value, required this.onChanged});
 
+  static const _options = <_RiskOption>[
+    _RiskOption('none',   'None',   Color(0xFF6B7280)),
+    _RiskOption('low',    'Low',    Color(0xFF15803D)),
+    _RiskOption('medium', 'Medium', Color(0xFFB45309)),
+    _RiskOption('high',   'High',   Color(0xFFB91C1C)),
+  ];
+
   @override
   Widget build(BuildContext context) {
-    return SegmentedButton<String>(
-      style: SegmentedButton.styleFrom(visualDensity: VisualDensity.compact),
-      showSelectedIcon: false,
-      segments: const [
-        ButtonSegment(value: 'none', label: Text('None')),
-        ButtonSegment(value: 'low', label: Text('Low')),
-        ButtonSegment(value: 'medium', label: Text('Medium')),
-        ButtonSegment(value: 'high', label: Text('High')),
-      ],
-      selected: {value},
-      onSelectionChanged: (s) => onChanged(s.first),
+    final cs = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: _options.map((opt) {
+        final selected = opt.id == value;
+        return InkWell(
+          onTap: () => onChanged(opt.id),
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: selected ? opt.color.withValues(alpha: 0.16) : cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: selected ? opt.color : cs.outlineVariant,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Text(
+              opt.label,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
+                color: selected ? opt.color : cs.onSurface,
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
+}
+
+class _RiskOption {
+  final String id;
+  final String label;
+  final Color color;
+  const _RiskOption(this.id, this.label, this.color);
 }

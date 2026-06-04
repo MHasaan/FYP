@@ -14,6 +14,7 @@ import signal
 import sys
 
 from manager.pipeline_manager import PipelineManager
+from manager.gdino_service import GDinoService
 
 
 def main():
@@ -23,10 +24,15 @@ def main():
     print("=" * 60)
 
     manager = PipelineManager()
+    # Visual Search runs as a separate background service so its heavy
+    # per-image GroundingDINO inference never blocks the live pipeline.
+    gdino = GDinoService()
+    gdino.start()
 
     # Handle graceful shutdown
     def signal_handler(sig, frame):
         print("\nShutdown signal received...")
+        gdino.stop()
         manager.shutdown()
         sys.exit(0)
 

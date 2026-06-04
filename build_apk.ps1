@@ -64,18 +64,27 @@ try {
     if (-not (Test-Path $apk)) { throw "APK not found at $apk" }
 
     $size = [math]::Round((Get-Item $apk).Length / 1MB, 1)
-    $dest = Join-Path $projectRoot "eldercare.apk"
-    Copy-Item $apk $dest -Force
+    # Two copies:
+    #   - eldercare.apk         → stable name for adb install scripts
+    #   - eldercare-<stamp>.apk → unique name so phone browsers can't serve a
+    #                             stale cached download (huge time-sink otherwise)
+    $stamp = Get-Date -Format "yyyyMMdd-HHmm"
+    $stableDest = Join-Path $projectRoot "eldercare.apk"
+    $stampedDest = Join-Path $projectRoot "eldercare-$stamp.apk"
+    Copy-Item $apk $stableDest -Force
+    Copy-Item $apk $stampedDest -Force
 
     Write-Host ""
     Write-Host "[OK] Build complete" -ForegroundColor Green
-    Write-Host "     APK:  $dest"
-    Write-Host "     Size: ${size} MB"
-    Write-Host "     Pointing at: $Url"
+    Write-Host "     Stable name:  $stableDest"
+    Write-Host "     Unique name:  $stampedDest"
+    Write-Host "     Size:         ${size} MB"
+    Write-Host "     Pointing at:  $Url"
     Write-Host ""
     Write-Host "Install on phone:"
-    Write-Host "  Send eldercare.apk to your phone (email/Drive/USB), tap to install."
-    Write-Host "  OR over USB:  adb install -r `"$dest`""
+    Write-Host "  Send the UNIQUE-NAMED apk to your phone (avoids browser cache):"
+    Write-Host "    $stampedDest"
+    Write-Host "  OR over USB:  adb install -r `"$stableDest`""
 }
 finally {
     Pop-Location

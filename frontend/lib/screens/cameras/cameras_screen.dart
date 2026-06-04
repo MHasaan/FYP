@@ -16,7 +16,6 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/status_pill.dart';
-import '../videos/video_upload_screen.dart';
 import 'camera_form.dart';
 
 class CamerasScreen extends StatefulWidget {
@@ -144,14 +143,6 @@ class _CamerasScreenState extends State<CamerasScreen> {
     if (res == true) await _load();
   }
 
-  Future<void> _openVideoUpload() async {
-    HapticFeedback.lightImpact();
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => const VideoUploadScreen(),
-    ));
-    await _load();
-  }
-
   Future<void> _delete(Map<String, dynamic> c) async {
     final cameraId = c['id'] as int;
     final hasRunning = _instancesByCamera[cameraId]?['status'] == 'running';
@@ -265,30 +256,18 @@ class _CamerasScreenState extends State<CamerasScreen> {
               : null,
         ),
 
-        // Action chips
+        // Single Add camera action — the camera form itself handles both
+        // live sources (RTSP/HTTP/USB) and video file uploads, so a separate
+        // "Upload video" entry would be redundant. Pick "File" in the form's
+        // source-type selector to upload a video.
         if (canManage)
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _ActionChip(
-                    label: 'Upload video',
-                    icon: Icons.video_file_rounded,
-                    accent: AppTheme.brandSage,
-                    onTap: _openVideoUpload,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _ActionChip(
-                    label: 'Add live source',
-                    icon: AppIcons.add,
-                    accent: AppTheme.brandTeal,
-                    onTap: _openCreate,
-                  ),
-                ),
-              ],
+            child: _ActionChip(
+              label: 'Add camera or upload video',
+              icon: AppIcons.add,
+              accent: AppTheme.brandTeal,
+              onTap: _openCreate,
             ),
           ),
 
@@ -315,11 +294,11 @@ class _CamerasScreenState extends State<CamerasScreen> {
                           icon: AppIcons.cameras,
                           title: 'No cameras yet',
                           subtitle: canManage
-                              ? 'Add a live RTSP feed or upload a video to run detection.'
+                              ? 'Add a live RTSP feed or upload a video file to run detection on.'
                               : 'No cameras have been registered yet.',
-                          actionLabel: canManage ? 'Upload video' : null,
-                          onAction: canManage ? _openVideoUpload : null,
-                          actionIcon: Icons.video_file_rounded,
+                          actionLabel: canManage ? 'Add camera' : null,
+                          onAction: canManage ? _openCreate : null,
+                          actionIcon: AppIcons.add,
                         )
                       : filtered.isEmpty
                           ? const EmptyState(

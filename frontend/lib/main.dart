@@ -20,6 +20,7 @@ import 'screens/patients/patients_screen.dart';
 import 'screens/reports/reports_screen.dart';
 import 'screens/system/system_screen.dart';
 import 'screens/users/users_screen.dart';
+import 'screens/visual_search/visual_search_screen.dart';
 import 'utils/browser_location.dart';
 import 'widgets/app_shell.dart';
 
@@ -158,6 +159,7 @@ class _RoleShellState extends State<_RoleShell> {
       systemBuilder:         (_) => const SystemScreen(),
       accountBuilder:        (_) => const AccountScreen(),
       relativeHomeBuilder:   (_) => const RelativeHomeScreen(),
+      visualSearchBuilder:   (_) => const VisualSearchScreen(),
     );
 
     final initialIndex = RoleNavigation.resolveInitialIndex(items, _initialTabKey, widget.role);

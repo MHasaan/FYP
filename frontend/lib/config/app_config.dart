@@ -18,6 +18,7 @@ class AppConfig {
   static String get pipelineStatusUrl => '$apiBaseUrl/api/pipeline/status';
   static String get pipelineControlUrl => '$apiBaseUrl/api/pipeline/control';
   static String get sessionsUrl => '$apiBaseUrl/api/pipeline/sessions';
+  // See note on patientsUrl — call sites add the trailing slash where needed.
   static String get instancesUrl => '$apiBaseUrl/api/instances';
   static String resultsUrl(int sessionId) =>
       '$apiBaseUrl/api/results/session/$sessionId';
@@ -28,11 +29,20 @@ class AppConfig {
     static String get authLogoutUrl => '$apiBaseUrl/api/auth/logout';
     static String get authMeUrl => '$apiBaseUrl/api/auth/me';
     static String get authUsersUrl => '$apiBaseUrl/api/auth/users';
+    // These URLs are used both as the full endpoint for list/create and as a
+    // prefix for /{id} style paths. Routes defined as @router.get("/", ...) in
+    // FastAPI require a trailing slash on the list endpoint or FastAPI will
+    // 307-redirect — and Dart's http client strips Authorization headers on
+    // HTTPS->HTTP redirects (which is what trycloudflare returns), causing
+    // 401 "Missing bearer token" everywhere. The list/create call sites in
+    // api_service.dart add the slash inline; nested paths (`/{id}` etc.) don't.
     static String get patientsUrl => '$apiBaseUrl/api/patients';
     static String get incidentsUrl => '$apiBaseUrl/api/incidents';
     static String get detectionSettingsUrl => '$apiBaseUrl/api/detection-settings';
     static String get incidentReportsUrl => '$apiBaseUrl/api/reports/incidents';
     static String get systemCapabilitiesUrl => '$apiBaseUrl/api/system/capabilities';
+    // Visual Search (GroundingDINO). Each endpoint is built below in api_service.
+    static String get groundingDinoBaseUrl => '$apiBaseUrl/api/grounding-dino';
 
   // WebSocket endpoints
   static String get wsFeedUrl => '$wsBaseUrl/ws/feed';

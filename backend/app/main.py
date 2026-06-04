@@ -14,6 +14,7 @@ from app.routes import (
     auth,
     camera,
     detection_settings,
+    grounding_dino,
     incidents,
     instances,
     logs,
@@ -37,10 +38,12 @@ from app.ws.incidents import incidents_ws
 from app.services.redis_service import close_redis_client
 from app.services.schedule_service import ScheduleRunnerService
 from app.services.result_processor import ResultProcessor
+from app.services.gdino_result_processor import GroundingDinoResultProcessor
 
 settings = get_settings()
 schedule_runner = ScheduleRunnerService()
 result_processor = ResultProcessor()
+gdino_result_processor = GroundingDinoResultProcessor()
 
 
 @asynccontextmanager
@@ -54,6 +57,8 @@ async def lifespan(app: FastAPI):
     print("Schedule runner started")
     await result_processor.start()
     print("Result processor started")
+    await gdino_result_processor.start()
+    print("GroundingDINO result processor started")
     yield
     # Shutdown
     print("Shutting down FYP Backend...")
@@ -61,6 +66,8 @@ async def lifespan(app: FastAPI):
     print("Schedule runner stopped")
     await result_processor.stop()
     print("Result processor stopped")
+    await gdino_result_processor.stop()
+    print("GroundingDINO result processor stopped")
     await close_redis_client()
     print("Redis client closed")
 
@@ -70,6 +77,14 @@ app = FastAPI(
     description="Backend API for the real-time ML pipeline system",
     version="1.0.0",
     lifespan=lifespan,
+    # IMPORTANT: do NOT auto-redirect missing trailing slashes.
+    # When the API is fronted by an HTTPS tunnel (e.g. Cloudflare quick tunnel),
+    # FastAPI's 307 Location header is HTTP, and HTTP clients strip the
+    # Authorization header on HTTPS->HTTP redirects for security. The user-
+    # visible symptom is mysterious 401 "Missing bearer token" on the cameras /
+    # patients / incidents tabs. Better to return 404 immediately so the bug is
+    # obvious in development.
+    redirect_slashes=False,
 )
 
 # CORS - use environment-configured origins
@@ -85,6 +100,39 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============ Trailing-slash tolerance ============
+# Many FastAPI routes here are registered with a trailing slash (e.g.
+# /api/instances/, /api/patients/) because the original code relied on
+# FastAPI's 307 redirect. But `redirect_slashes=False` is intentional
+# (see comment on the FastAPI() constructor above), so the redirect path
+# is closed. Meanwhile the Flutter web client's Dart Uri pipeline strips
+# the trailing slash off plain "directory" URLs before sending the
+# request, so /api/instances/ on the wire becomes /api/instances and
+# 404s. We patch the request path in place: if the incoming path lacks a
+# trailing slash and adding one would match a registered route, we rewrite
+# it. Cheap, safe (routes are static at startup), and avoids re-registering
+# every existing route under both forms.
+@app.middleware("http")
+async def add_trailing_slash_for_known_routes(request: Request, call_next):
+    path = request.url.path
+    if (
+        path
+        and not path.endswith("/")
+        and not path.startswith(("/docs", "/openapi.json", "/redoc", "/health"))
+    ):
+        candidate = path + "/"
+        for route in app.router.routes:
+            route_path = getattr(route, "path", None)
+            if route_path == candidate:
+                # Rewrite the request path in the ASGI scope; everything
+                # downstream (routing, dependency resolution, logs) uses
+                # the new path.
+                request.scope["path"] = candidate
+                request.scope["raw_path"] = candidate.encode("utf-8")
+                break
+    return await call_next(request)
 
 
 # ============ API Key Authentication Middleware ============
@@ -136,6 +184,7 @@ app.include_router(webhooks.router)
 app.include_router(schedules.router)
 app.include_router(roi.router)
 app.include_router(videos.router)
+app.include_router(grounding_dino.router)
 
 
 # ============ WebSocket Endpoints ============

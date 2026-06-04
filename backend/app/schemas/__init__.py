@@ -743,4 +743,35 @@ class PaginatedResponse(BaseModel):
     total: int
     limit: int
     offset: int
-    has_more: bool
+
+
+# ============ Grounding DINO (Visual Search) Schemas ============
+
+class GroundingDinoJobResponse(BaseModel):
+    id: int
+    user_id: Optional[int]
+    name: Optional[str]
+    input_type: str
+    input_original_filename: Optional[str]
+    prompt: str
+    box_threshold: float
+    text_threshold: float
+    status: str
+    output_image_path: Optional[str]
+    output_video_path: Optional[str]
+    detections: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {}
+    error: Optional[str]
+    processing_ms: Optional[float]
+    created_at: datetime
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroundingDinoJobListResponse(BaseModel):
+    items: list[GroundingDinoJobResponse]
+    total: int
+    limit: int
+    offset: int

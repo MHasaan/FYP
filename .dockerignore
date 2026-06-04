@@ -12,3 +12,15 @@
 **/.idea
 **/venv
 **/env
+
+# Exclude large runtime-only directories from the build context. The ml_manager
+# image now builds with the repo root as its context (so it can COPY both
+# ml_manager/ AND GroundingDINO/). Without these excludes, Docker would ship
+# ~1 GB of cache + videos to the daemon on every build.
+ml_manager/cache
+videos
+frontend/.dart_tool
+frontend/.flutter-plugins*
+**/*.apk
+**/.pytest_cache
+**/.mypy_cache

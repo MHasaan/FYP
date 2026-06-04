@@ -38,6 +38,7 @@ class RoleNavigation {
     required NavBuilder systemBuilder,
     required NavBuilder accountBuilder,
     required NavBuilder relativeHomeBuilder,
+    required NavBuilder visualSearchBuilder,
   }) {
     if (RoleAccess.isAdmin(role)) {
       return [
@@ -46,6 +47,7 @@ class RoleNavigation {
         NavItem(key: 'incidents',  label: 'Incidents',       icon: AppIcons.incidents,      selectedIcon: AppIcons.incidents,      builder: incidentsBuilder),
         NavItem(key: 'patients',   label: 'Patients',        icon: AppIcons.patients,       selectedIcon: AppIcons.patients,       builder: patientsBuilder),
         NavItem(key: 'cameras',    label: 'Cameras',         icon: AppIcons.cameras,        selectedIcon: AppIcons.cameras,        builder: camerasBuilder),
+        NavItem(key: 'visual',     label: 'Visual Search',   icon: AppIcons.visualSearch,   selectedIcon: AppIcons.visualSearch,   builder: visualSearchBuilder),
         NavItem(key: 'detection',  label: 'Detection rules', icon: AppIcons.detectionRules, selectedIcon: AppIcons.detectionRules, builder: detectionRulesBuilder),
         NavItem(key: 'reports',    label: 'Reports',         icon: AppIcons.reports,        selectedIcon: AppIcons.reports,        builder: reportsBuilder),
         NavItem(key: 'users',      label: 'Users',           icon: AppIcons.users,          selectedIcon: AppIcons.users,          builder: usersBuilder),
@@ -59,6 +61,7 @@ class RoleNavigation {
         NavItem(key: 'live',       label: 'Live Monitor',    icon: AppIcons.live,           selectedIcon: AppIcons.live,           builder: liveMonitorBuilder),
         NavItem(key: 'incidents',  label: 'Incidents',       icon: AppIcons.incidents,      selectedIcon: AppIcons.incidents,      builder: incidentsBuilder),
         NavItem(key: 'patients',   label: 'Patients',        icon: AppIcons.patients,       selectedIcon: AppIcons.patients,       builder: patientsBuilder),
+        NavItem(key: 'visual',     label: 'Visual Search',   icon: AppIcons.visualSearch,   selectedIcon: AppIcons.visualSearch,   builder: visualSearchBuilder),
         NavItem(key: 'detection',  label: 'Detection rules', icon: AppIcons.detectionRules, selectedIcon: AppIcons.detectionRules, builder: detectionRulesBuilder),
         NavItem(key: 'reports',    label: 'Reports',         icon: AppIcons.reports,        selectedIcon: AppIcons.reports,        builder: reportsBuilder),
         NavItem(key: 'account',    label: 'Account',         icon: AppIcons.account,        selectedIcon: AppIcons.account,        builder: accountBuilder),

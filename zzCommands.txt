@@ -32,3 +32,30 @@ docker compose exec ml_manager python -c "import torch; print(torch.cuda.is_avai
 docker compose logs -f backend
 docker compose logs -f ml_manager
 docker compose logs -f frontend
+
+------------------
+only for claudefare apk
+
+& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --url http://localhost:8000
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ claude --resume bdd8c1ed-0fb3-495f-a949-35d7b347da46     

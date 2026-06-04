@@ -53,3 +53,21 @@ frontend/lib/firebase_options.dart
 
 # ML manager local model cache
 ml_manager/cache/
+
+# Claude Code local logs / settings
+.claude/
+
+# Vendored GroundingDINO clone (has its own .git; pulled separately)
+GroundingDINO/
+
+# FYP-2 report scratch materials (large docs, PDFs, images — kept locally)
+reportFYP/
+_docx_media/
+_extract_proposal.txt
+_extract_report.txt
+FINAL_INSTRUCTIONS_FOR_BOTH_LIKE_HUMANS.txt
+
+# Runtime video data (only keep curated samples under videos/recordings/)
+videos/uploads/
+videos/gdino_inputs/
+videos/gdino_outputs/

@@ -1,7 +1,10 @@
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../services/api_service.dart';
 import '../../theme/app_icons.dart';
+import '../../theme/app_theme.dart';
 import '../../widgets/form_field_box.dart';
 
 /// Models actually wired in the ML manager today (see WORKER_FACTORIES in
@@ -46,6 +49,12 @@ class _CameraFormDialogState extends State<CameraFormDialog> {
   List<Map<String, dynamic>> _patients = [];
   bool _busy = false;
   String? _error;
+
+  // Video file upload state — only used when _sourceType == 'video_file'.
+  PlatformFile? _pickedVideo;
+  bool _uploading = false;
+  int _uploadSent = 0;
+  int _uploadTotal = 0;
 
   bool get _isEdit => widget.existing != null;
 
@@ -93,8 +102,78 @@ class _CameraFormDialogState extends State<CameraFormDialog> {
   List<String> get _wiredEnabledModels =>
       _models.where(kWiredModels.contains).toList();
 
+  /// Open the native file picker, upload the chosen video to the backend, then
+  /// stuff the returned server path into `_source` so it can be used as the
+  /// camera config's `source_url`. Only invoked when source_type == 'video_file'.
+  Future<void> _pickAndUploadVideo() async {
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.video,
+      allowMultiple: false,
+      withData: kIsWeb,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+    final file = picked.files.single;
+
+    setState(() {
+      _pickedVideo = file;
+      _uploading = true;
+      _uploadSent = 0;
+      _uploadTotal = file.size;
+      _error = null;
+    });
+
+    try {
+      final resp = await _api.uploadVideo(
+        filePath: kIsWeb ? null : file.path,
+        bytes: kIsWeb ? file.bytes : null,
+        filename: file.name,
+        onProgress: (sent, _) {
+          if (mounted) setState(() => _uploadSent = sent);
+        },
+      );
+      final serverPath = resp['path'] as String?;
+      if (serverPath == null || serverPath.isEmpty) {
+        throw Exception('Backend did not return a video path');
+      }
+      if (mounted) {
+        setState(() {
+          _source.text = serverPath;
+          _uploading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _pickedVideo = null;
+          _error = 'Upload failed: $e';
+        });
+      }
+    }
+  }
+
+  String _humanSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    // The video_file source has its own picker UI (no TextFormField, so the
+    // standard validator chain doesn't catch the empty case). Require either
+    // an upload-in-progress to finish OR a non-empty source path before we
+    // try to save.
+    if (_sourceType == 'video_file') {
+      if (_uploading) {
+        setState(() => _error = 'Wait for the video upload to finish before saving.');
+        return;
+      }
+      if (_source.text.trim().isEmpty) {
+        setState(() => _error = 'Pick and upload a video before saving.');
+        return;
+      }
+    }
     setState(() {
       _busy = true;
       _error = null;
@@ -260,14 +339,34 @@ class _CameraFormDialogState extends State<CameraFormDialog> {
                           ),
                         ),
                         const SizedBox(height: 12),
-                        FormFieldBox(
-                          label: 'Source URL / device path',
-                          required: true,
-                          helper: _sourceType == 'usb' ? 'e.g. 0 (default camera)' : (_sourceType == 'video_file' ? 'e.g. /videos/sample.mp4' : 'e.g. rtsp://camera.local/stream'),
-                          child: TextFormField(
-                            controller: _source,
-                            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                        if (_sourceType == 'video_file') ...[
+                          FormFieldBox(
+                            label: 'Video file',
+                            required: true,
+                            helper: _source.text.isEmpty
+                                ? 'Pick a video from your device — it uploads to the server and becomes the source.'
+                                : 'Uploaded. Pick again to replace.',
+                            child: _VideoFilePicker(
+                              picked: _pickedVideo,
+                              uploading: _uploading,
+                              uploadSent: _uploadSent,
+                              uploadTotal: _uploadTotal,
+                              serverPath: _source.text,
+                              onPick: _busy ? null : _pickAndUploadVideo,
+                              humanSize: _humanSize,
+                            ),
                           ),
+                        ] else
+                          FormFieldBox(
+                            label: 'Source URL / device path',
+                            required: true,
+                            helper: _sourceType == 'usb'
+                                ? 'e.g. 0 (default camera)'
+                                : 'e.g. rtsp://camera.local/stream',
+                            child: TextFormField(
+                              controller: _source,
+                              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                            ),
                         ),
                         const SizedBox(height: 12),
                         Row(
@@ -423,6 +522,136 @@ class _CameraFormDialogState extends State<CameraFormDialog> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// File picker shown inside the camera form when source_type == 'video_file'.
+/// Wraps the FilePicker invocation + upload progress + success state. On
+/// success, the parent form's `_source` text is populated with the returned
+/// server path so the rest of the create-camera flow proceeds as normal.
+class _VideoFilePicker extends StatelessWidget {
+  final PlatformFile? picked;
+  final bool uploading;
+  final int uploadSent;
+  final int uploadTotal;
+  final String serverPath;
+  final VoidCallback? onPick;
+  final String Function(int) humanSize;
+
+  const _VideoFilePicker({
+    required this.picked,
+    required this.uploading,
+    required this.uploadSent,
+    required this.uploadTotal,
+    required this.serverPath,
+    required this.onPick,
+    required this.humanSize,
+  });
+
+  double get _progress => uploadTotal <= 0 ? 0 : (uploadSent / uploadTotal).clamp(0.0, 1.0);
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final uploaded = serverPath.isNotEmpty && !uploading;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Pick button / file info card
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: (onPick == null || uploading) ? null : onPick,
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: uploaded
+                    ? AppTheme.brandSage.withValues(alpha: 0.10)
+                    : cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: uploaded
+                      ? AppTheme.brandSage.withValues(alpha: 0.40)
+                      : AppTheme.brandTeal.withValues(alpha: 0.35),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    uploaded ? Icons.check_circle_rounded : Icons.video_file_rounded,
+                    size: 28,
+                    color: uploaded ? AppTheme.brandSage : AppTheme.brandTeal,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          picked == null
+                              ? 'Pick a video from your device'
+                              : picked!.name,
+                          style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          picked == null
+                              ? 'MP4 / MOV / AVI · up to 500 MB'
+                              : (uploaded
+                                  ? 'Uploaded — tap to pick a different one'
+                                  : (uploading
+                                      ? 'Uploading… ${humanSize(uploadSent)} / ${humanSize(uploadTotal)}'
+                                      : '${humanSize(picked!.size)} — tap to upload')),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+
+        // Progress bar while uploading
+        if (uploading) ...[
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _progress,
+              minHeight: 6,
+              backgroundColor: cs.surfaceContainerHighest,
+              color: AppTheme.brandTeal,
+            ),
+          ),
+        ],
+
+        // Show resolved server path once uploaded, for transparency
+        if (uploaded) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Server path: $serverPath',
+            style: TextStyle(
+              fontSize: 11,
+              color: cs.onSurfaceVariant,
+              fontFamily: 'monospace',
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
     );
   }
 }

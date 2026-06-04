@@ -63,6 +63,7 @@ class AppIcons {
   static const IconData trend       = Icons.trending_up_rounded;
   static const IconData overlay     = Icons.layers_rounded;
   static const IconData overlayOff  = Icons.layers_clear_rounded;
+  static const IconData visualSearch = Icons.image_search_rounded;
 
   /// Returns the icon for a given incident event_type string.
   static IconData forEventType(String? eventType) {

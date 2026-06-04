@@ -391,3 +391,33 @@ class SystemPlan(Base):
     description = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class GroundingDinoJob(Base):
+    """A standalone open-set object detection job using GroundingDINO.
+
+    This is intentionally decoupled from the live pipeline (Sessions /
+    PipelineInstance) — Visual Search is a separate entity with its own
+    request-response flow, not a streaming model.
+    """
+    __tablename__ = "grounding_dino_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("user_accounts.id"), nullable=True)
+    name = Column(String(255), nullable=True)
+    input_type = Column(String(20), nullable=False)  # image | video
+    input_path = Column(String(500), nullable=False)
+    input_original_filename = Column(String(255), nullable=True)
+    prompt = Column(Text, nullable=False)
+    box_threshold = Column(Float, default=0.35)
+    text_threshold = Column(Float, default=0.25)
+    status = Column(String(20), default="queued")  # queued, running, completed, failed
+    output_image_path = Column(String(500), nullable=True)
+    output_video_path = Column(String(500), nullable=True)
+    detections = Column(JSON, default=[])  # [{label, confidence, box:[x1,y1,x2,y2]}, ...]
+    summary = Column(JSON, default={})  # counts per label, total detections, etc.
+    error = Column(Text, nullable=True)
+    processing_ms = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)

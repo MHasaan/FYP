@@ -71,11 +71,19 @@ services:
   # ============================================
   ml_manager:
     build:
-      context: ./ml_manager
-      dockerfile: Dockerfile
+      # Context is the repo root so the Dockerfile can COPY both
+      # ml_manager/ AND GroundingDINO/. GroundingDINO has to be in the
+      # build context to compile its custom CUDA op at image-build time.
+      context: .
+      dockerfile: ml_manager/Dockerfile
     container_name: fyp-ml-manager
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Visual Search runs the real GroundingDINO by default now. Flip to
+      # 1 if you want the stub for local UI testing without the real
+      # model loaded. See ml_manager/manager/gdino_loader.py for details.
+      - GDINO_USE_STUB=${GDINO_USE_STUB:-0}
     ports:
       - "${ML_MANAGER_PORT:-8001}:8001"
     volumes:
@@ -84,10 +92,24 @@ services:
       - ./ml_manager/models:/app/models
       - ./videos:/videos
       - ./ml_manager/cache:/root/.cache
+      # Mount the GroundingDINO source tree read-only so the loader can
+      # import its modules without needing a separate pip install. The
+      # custom CUDA op still requires `pip install -e` to compile —
+      # see gdino_loader.py.
+      - ./GroundingDINO:/app/GroundingDINO:ro
     depends_on:
       redis:
         condition: service_healthy
-    # GPU access is configured in docker-compose.override.yml
+    # GPU passthrough — required for GroundingDINO + ultralytics + pose models
+    # to actually use the host's NVIDIA GPU. Without this the container runs
+    # CPU-only despite the NVIDIA base image.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # ============================================
   # Flutter Web (Nginx)

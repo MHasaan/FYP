@@ -60,9 +60,14 @@ async def register_device(
     )
     existing = existing_result.scalar_one_or_none()
 
+    # device_tokens.user_id is VARCHAR(255) for historical reasons (legacy
+    # supports anonymous user_id strings) — cast to str so asyncpg doesn't
+    # reject the int with "expected str, got int".
+    user_id_str = str(user.id)
+
     if existing:
         existing.platform = payload.platform
-        existing.user_id = user.id
+        existing.user_id = user_id_str
         existing.device_name = payload.device_name
         existing.is_active = True
         existing.last_used_at = datetime.now(timezone.utc)
@@ -73,7 +78,7 @@ async def register_device(
     db_token = DeviceToken(
         device_token=payload.device_token,
         platform=payload.platform,
-        user_id=user.id,
+        user_id=user_id_str,
         device_name=payload.device_name,
         is_active=True,
         last_used_at=datetime.now(timezone.utc),
@@ -92,7 +97,8 @@ async def _get_own_device(
     device = result.scalar_one_or_none()
     if not device:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device token not found")
-    if user.role != "admin" and device.user_id != user.id:
+    # user_id is VARCHAR in the DB — compare as str.
+    if user.role != "admin" and device.user_id != str(user.id):
         # Same response shape as missing — don't leak existence to non-owners.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device token not found")
     return device
@@ -147,10 +153,10 @@ async def send_test_notification(
         query = query.where(DeviceToken.platform == payload.platform)
     if user.role == "admin":
         if payload.user_id:
-            query = query.where(DeviceToken.user_id == payload.user_id)
+            query = query.where(DeviceToken.user_id == str(payload.user_id))
     else:
         # Force scope to self regardless of payload.user_id
-        query = query.where(DeviceToken.user_id == user.id)
+        query = query.where(DeviceToken.user_id == str(user.id))
 
     result = await db.execute(query)
     recipients = list(result.scalars().all())
@@ -186,10 +192,17 @@ async def send_test_notification(
         if failed:
             message += f" {failed} failed and were marked inactive."
 
+    # PushNotificationTestResponse.user_id is Optional[str]; user.id is int.
+    # Cast to str so Pydantic doesn't 500 on the response model validation.
+    if user.role == "admin":
+        response_user_id = str(payload.user_id) if payload.user_id else None
+    else:
+        response_user_id = str(user.id)
+
     return PushNotificationTestResponse(
         sent_to=sent_to,
         platform=payload.platform,
-        user_id=payload.user_id if user.role == "admin" else user.id,
+        user_id=response_user_id,
         simulated=simulated,
         message=message,
     )

@@ -22,6 +22,9 @@ class ApiService {
 
   static void setAuthToken(String? token) {
     _authToken = token?.trim().isEmpty == true ? null : token?.trim();
+    // ignore: avoid_print
+    print('[ApiService] setAuthToken -> set=${_authToken != null} '
+        'len=${_authToken?.length ?? 0}');
   }
 
   /// Public read-only access to the current bearer token.
@@ -44,6 +47,12 @@ class ApiService {
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
+    // Temporary diagnostic — visible via `adb logcat | grep flutter` so we can
+    // confirm in the field whether the bearer is actually being attached.
+    // Remove once the install + auth flow is verified stable.
+    // ignore: avoid_print
+    print('[ApiService] _buildHeaders -> hasAuth=${token != null && token.isNotEmpty} '
+        'tokenLen=${token?.length ?? 0}');
     return headers;
   }
 
@@ -279,7 +288,8 @@ class ApiService {
   // ============ Pipeline Instances ============
 
   Future<List<dynamic>> getInstances({String? statusFilter}) async {
-    var url = AppConfig.instancesUrl;
+    // Trailing slash matters: see AppConfig.patientsUrl comment.
+    var url = '${AppConfig.instancesUrl}/';
     if (statusFilter != null) url += '?status_filter=$statusFilter';
     final response = await _client.get(Uri.parse(url), headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
@@ -327,7 +337,7 @@ class ApiService {
 
   Future<Map<String, dynamic>> createInstance(Map<String, dynamic> instanceData) async {
     final response = await _client.post(
-      Uri.parse(AppConfig.instancesUrl),
+      Uri.parse('${AppConfig.instancesUrl}/'),
       headers: _buildHeaders(),
       body: jsonEncode(instanceData),
     );
@@ -746,14 +756,15 @@ class ApiService {
     final queryParams = <String, String>{
       if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
     };
-    final uri = Uri.parse(AppConfig.patientsUrl).replace(queryParameters: queryParams);
+    // Trailing slash matters: see AppConfig.patientsUrl comment.
+    final uri = Uri.parse('${AppConfig.patientsUrl}/').replace(queryParameters: queryParams);
     final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> createPatient(Map<String, dynamic> payload) async {
     final response = await _client.post(
-      Uri.parse(AppConfig.patientsUrl),
+      Uri.parse('${AppConfig.patientsUrl}/'),
       headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
@@ -801,14 +812,15 @@ class ApiService {
       if (startTime != null) 'start_time': startTime.toUtc().toIso8601String(),
       if (endTime != null) 'end_time': endTime.toUtc().toIso8601String(),
     };
-    final uri = Uri.parse(AppConfig.incidentsUrl).replace(queryParameters: queryParams);
+    // Trailing slash matters: see AppConfig.patientsUrl comment.
+    final uri = Uri.parse('${AppConfig.incidentsUrl}/').replace(queryParameters: queryParams);
     final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonResponse(response);
   }
 
   Future<Map<String, dynamic>> createIncident(Map<String, dynamic> payload) async {
     final response = await _client.post(
-      Uri.parse(AppConfig.incidentsUrl),
+      Uri.parse('${AppConfig.incidentsUrl}/'),
       headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
@@ -852,14 +864,15 @@ class ApiService {
       if (cameraConfigId != null) 'camera_config_id': '$cameraConfigId',
       if (patientId != null) 'patient_id': '$patientId',
     };
-    final uri = Uri.parse(AppConfig.detectionSettingsUrl).replace(queryParameters: queryParams);
+    // Trailing slash matters: see AppConfig.patientsUrl comment.
+    final uri = Uri.parse('${AppConfig.detectionSettingsUrl}/').replace(queryParameters: queryParams);
     final response = await _client.get(uri, headers: _buildHeaders(json: false));
     return _handleJsonListResponse(response);
   }
 
   Future<Map<String, dynamic>> createDetectionSetting(Map<String, dynamic> payload) async {
     final response = await _client.post(
-      Uri.parse(AppConfig.detectionSettingsUrl),
+      Uri.parse('${AppConfig.detectionSettingsUrl}/'),
       headers: _buildHeaders(),
       body: jsonEncode(payload),
     );
@@ -910,6 +923,129 @@ class ApiService {
       headers: _buildHeaders(json: false),
     );
     return _handleJsonResponse(response);
+  }
+
+  // ============ Visual Search (GroundingDINO) ============
+
+  /// Upload an image OR video to the Visual Search endpoint.
+  /// [inputType] is 'image' or 'video' — picks the matching backend route.
+  /// Server stores the file, queues a job, and returns the new job row
+  /// (status='queued'). Poll [getGroundingDinoJob] until status is
+  /// 'completed' or 'failed'.
+  Future<Map<String, dynamic>> submitGroundingDinoJob({
+    required String inputType, // 'image' | 'video'
+    required String prompt,
+    String? name,
+    double boxThreshold = 0.35,
+    double textThreshold = 0.25,
+    String? filePath,
+    List<int>? bytes,
+    String? filename,
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    assert(inputType == 'image' || inputType == 'video',
+        "inputType must be 'image' or 'video'");
+
+    final endpoint = '${AppConfig.groundingDinoBaseUrl}/detect/$inputType';
+    final uri = Uri.parse(endpoint);
+    final request = http.MultipartRequest('POST', uri);
+
+    final tok = _authToken;
+    if (tok != null && tok.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $tok';
+    }
+
+    request.fields['prompt'] = prompt;
+    request.fields['box_threshold'] = boxThreshold.toString();
+    request.fields['text_threshold'] = textThreshold.toString();
+    if (name != null && name.trim().isNotEmpty) {
+      request.fields['name'] = name.trim();
+    }
+
+    if (filePath != null) {
+      final file = File(filePath);
+      final length = await file.length();
+      final stream = http.ByteStream(
+          _progressStream(file.openRead(), length, onProgress));
+      request.files.add(http.MultipartFile(
+        'file', stream, length,
+        filename: filename ?? file.uri.pathSegments.last,
+      ));
+    } else if (bytes != null && filename != null) {
+      final total = bytes.length;
+      final stream = http.ByteStream(_progressStream(
+        Stream.fromIterable([bytes]),
+        total,
+        onProgress,
+      ));
+      request.files.add(http.MultipartFile(
+        'file', stream, total, filename: filename,
+      ));
+    } else {
+      throw ArgumentError('Provide either filePath or (bytes + filename).');
+    }
+
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    return _handleJsonResponse(response);
+  }
+
+  /// List the current user's Visual Search jobs (most recent first).
+  Future<Map<String, dynamic>> listGroundingDinoJobs({
+    int limit = 50,
+    int offset = 0,
+    String? statusFilter,
+  }) async {
+    final qp = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+      if (statusFilter != null && statusFilter.isNotEmpty)
+        'status_filter': statusFilter,
+    };
+    final uri = Uri.parse('${AppConfig.groundingDinoBaseUrl}/jobs')
+        .replace(queryParameters: qp);
+    final response =
+        await _client.get(uri, headers: _buildHeaders(json: false));
+    return _handleJsonResponse(response);
+  }
+
+  Future<Map<String, dynamic>> getGroundingDinoJob(int jobId) async {
+    final response = await _client.get(
+      Uri.parse('${AppConfig.groundingDinoBaseUrl}/jobs/$jobId'),
+      headers: _buildHeaders(json: false),
+    );
+    return _handleJsonResponse(response);
+  }
+
+  Future<void> deleteGroundingDinoJob(int jobId) async {
+    final response = await _client.delete(
+      Uri.parse('${AppConfig.groundingDinoBaseUrl}/jobs/$jobId'),
+      headers: _buildHeaders(json: false),
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(response.statusCode, response.body);
+    }
+  }
+
+  /// URL the frontend can hand to Image.network / VideoPlayer for an
+  /// annotated job output. The browser still needs the bearer token, so
+  /// callers should fetch the bytes via [downloadGroundingDinoOutput] if
+  /// the endpoint is behind auth.
+  String groundingDinoOutputUrl(int jobId) =>
+      '${AppConfig.groundingDinoBaseUrl}/jobs/$jobId/output';
+
+  /// Fetches the annotated output as raw bytes (carries the bearer token).
+  /// Returns null if the output isn't ready yet (HTTP 404).
+  Future<List<int>?> downloadGroundingDinoOutput(int jobId) async {
+    final response = await _client.get(
+      Uri.parse(groundingDinoOutputUrl(jobId)),
+      headers: _buildHeaders(json: false),
+    );
+    if (response.statusCode == 404) return null;
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw ApiException(response.statusCode, response.body);
+    }
+    return response.bodyBytes;
   }
 
   void dispose() {

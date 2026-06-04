@@ -125,6 +125,29 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                             .animate(delay: 280.ms)
                             .slideX(begin: -0.12, duration: 500.ms, curve: Curves.easeOutCubic)
                             .fade(duration: 400.ms),
+
+                        const SizedBox(height: 14),
+
+                        // Build tag — temporary diagnostic so we can visually
+                        // confirm which APK build is installed on the phone.
+                        // Remove once installs are stable.
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.30)),
+                          ),
+                          child: Text(
+                            'BUILD 1.1.0+4',
+                            style: GoogleFonts.outfit(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                              letterSpacing: 1.2,
+                            ),
+                          ),
+                        ).animate(delay: 350.ms).fade(duration: 400.ms),
                       ],
                     ),
                   ),
