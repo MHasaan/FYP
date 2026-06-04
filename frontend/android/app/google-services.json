@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "177437345281",
+    "project_id": "eldercarefyp-c5407",
+    "storage_bucket": "eldercarefyp-c5407.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:177437345281:android:09e36fc66019f29457a200",
+        "android_client_info": {
+          "package_name": "com.fyp.fyp_frontend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA7or-8NvLWO9elzh5d2yqHJq7m3mhlwnk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
