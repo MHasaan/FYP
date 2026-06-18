@@ -11,8 +11,8 @@ import '../../widgets/form_field_box.dart';
 /// `ml_manager/manager/pipeline_manager.py`). The other names are reserved
 /// for future workers; we still surface them so the UI matches the FRs but
 /// disable selection until the worker exists.
-const Set<String> kWiredModels = {'pose', 'fall_detection', 'test'};
-const Set<String> kPlannedModels = {'yolo', 'seizure_detection'};
+const Set<String> kWiredModels = {'pose', 'fall_detection', 'seizure_detection', 'test'};
+const Set<String> kPlannedModels = {'yolo'};
 
 class CameraFormDialog extends StatefulWidget {
   final Map<String, dynamic>? existing;

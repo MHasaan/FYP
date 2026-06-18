@@ -306,11 +306,14 @@ class ResultProcessor:
         if rule.model_name == "fall_detection":
             prob = result.get("probability", 0)
             message = f"⚠ FALL DETECTED (Confidence: {prob:.2f})"
+        elif rule.model_name == "seizure_detection":
+            prob = result.get("probability", 0)
+            message = f"⚠ SEIZURE DETECTED (Confidence: {prob:.2f})"
 
         log = ActivityLog(
             event_type="alert",
             source="ml_manager",
-            severity="critical" if rule.model_name == "fall_detection" else "warning",
+            severity="critical" if rule.model_name in {"fall_detection", "seizure_detection"} else "warning",
             message=message,
             pipeline_instance_id=instance_id,
             session_id=session_id,

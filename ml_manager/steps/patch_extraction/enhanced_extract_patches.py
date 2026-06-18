@@ -5,6 +5,17 @@ import numpy as np
 from pathlib import Path
 import json
 
+# Canonical 15-keypoint orderings for each model.
+# These determine which OpenPose-18 points are selected and in what order.
+# Must match the ordering used when the model was trained.
+
+# VSViGFall.pth: drops neck(1), right_ear(16), left_ear(17); reorders eyes to front.
+FALL_INDICES = [0, 15, 14, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+# SeizureVSViG_winner_nogkn.pth: drops neck(1), left_eye(15), right_ear(16); natural index order.
+SEIZURE_INDICES = [0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 17]
+
+
 def norm(x):
     """Original normalization function with enhanced error handling"""
     x_min = np.min(x)
@@ -20,6 +31,20 @@ def gen_kernel(size, sigma):
     kernel = kernel / np.sum(kernel)
     kernel = (kernel - np.min(kernel)) / (np.max(kernel) - np.min(kernel))
     return kernel
+
+# Cache of precomputed 3-channel float32 kernels keyed by (size, sigma).
+# gen_kernel() uses np.fromfunction which is expensive. At 30 FPS, rebuilding
+# it every frame for every call adds up — caching makes it a one-time cost
+# per unique (size, sigma) pair (typically just one pair per run).
+_KERNEL3_CACHE: dict = {}
+
+def _get_kernel3(size: int, sigma: float) -> np.ndarray:
+    """Return a cached (size, size, 3) float32 Gaussian kernel."""
+    key = (size, sigma)
+    if key not in _KERNEL3_CACHE:
+        k = gen_kernel(size, size * sigma)
+        _KERNEL3_CACHE[key] = np.expand_dims(k, 2).repeat(3, axis=2)
+    return _KERNEL3_CACHE[key]
 
 def extract_patches(img, kpts, kernel_size=128, kernel_sigma=0.3, scale=1/4):
     """
@@ -49,8 +74,7 @@ def extract_patches(img, kpts, kernel_size=128, kernel_sigma=0.3, scale=1/4):
     img_shape = img.shape # 1080 x 1920 x 3 video resolution
     pad_img = np.zeros((img_shape[0]+kernel_size*2, img_shape[1]+kernel_size*2, 3))
     pad_img[kernel_size:-kernel_size, kernel_size:-kernel_size, :] = img
-    kernel = gen_kernel(kernel_size, kernel_size*kernel_sigma)
-    kernel = np.expand_dims(kernel, 2).repeat(3, axis=2)
+    kernel = _get_kernel3(kernel_size, kernel_sigma)
     
     # Canonical VSViG 15-point selection from OpenPose 18-point layout.
     # Reorders into 5 body-part groups of 3 (Head, R_Arm, L_Arm, R_Leg, L_Leg).
@@ -180,43 +204,52 @@ def estimate_missing_keypoint(kpt_idx, all_kpts, img_shape, body_connections):
     
     return np.array([W//2, H//2])
 
-def extract_patches_with_confidence(img, kpts, kernel_size=128, kernel_sigma=0.3, 
-                                   scale=1/4, min_confidence=0.1, debug=False):
+def extract_patches_with_confidence(img, kpts, kernel_size=128, kernel_sigma=0.3,
+                                   scale=1/4, min_confidence=0.1, debug=False,
+                                   ref_height=1080, indices_to_keep=None):
     """
-    Extract patches with robust confidence handling and fallback strategies
-    
+    Extract patches with robust confidence handling and fallback strategies.
+
     Args:
         img: Input image (H, W, 3)
         kpts: Keypoints array (18, 3) - x, y, confidence
-        kernel_size: Size of the extraction kernel
+        kernel_size: Base Gaussian kernel size at ref_height resolution
         kernel_sigma: Sigma for Gaussian kernel
         scale: Scale factor for output patches
         min_confidence: Minimum confidence threshold
         debug: Print debug information
-    
+        ref_height: Reference frame height for resolution-aware kernel scaling (default 1080)
+        indices_to_keep: Which of the 18 OpenPose keypoints to select, in order.
+                         Defaults to FALL_INDICES (backward-compatible).
+                         Use SEIZURE_INDICES for the seizure model.
+
     Returns:
         patches: Array of shape (15, scaled_size, scaled_size, 3)
         valid_mask: Boolean mask indicating which patches had valid keypoints
         debug_info: Dictionary with debugging information
     """
+    if indices_to_keep is None:
+        indices_to_keep = FALL_INDICES
+
     img_shape = img.shape
     H, W = img_shape[0], img_shape[1]
-    
+
+    # Scale kernel window so each patch covers the same body fraction at any resolution.
+    kernel_size = max(8, int(round(kernel_size * H / ref_height)))
+
     # Ensure input is correct format
     if len(kpts.shape) != 2 or kpts.shape[1] != 3:
         raise ValueError(f"Expected keypoints shape (18, 3), got {kpts.shape}")
-    
+
     # Create padded image
     pad_size = kernel_size
     pad_img = np.zeros((H + 2*pad_size, W + 2*pad_size, 3), dtype=img.dtype)
     pad_img[pad_size:pad_size+H, pad_size:pad_size+W, :] = img
-    
-    # Generate kernel
-    kernel = gen_kernel(kernel_size, kernel_size*kernel_sigma)
-    kernel = np.expand_dims(kernel, 2).repeat(3, axis=2)
-    
-    # Remove specific keypoints (indices 1, 15, 16 from original 18)
-    indices_to_keep = [i for i in range(18) if i not in [1, 15, 16]]
+
+    # Generate kernel (cached — expensive np.fromfunction is a one-time cost per size/sigma)
+    kernel = _get_kernel3(kernel_size, kernel_sigma)
+
+    # Select and order the 15 keypoints according to the model-specific ordering
     kpts_filtered = kpts[indices_to_keep]  # Shape: (15, 3)
     
     # Calculate output patch size

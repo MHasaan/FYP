@@ -47,6 +47,8 @@ class ApiService {
     if (token != null && token.isNotEmpty) {
       headers['Authorization'] = 'Bearer $token';
     }
+    // Bypass ngrok's browser-warning interstitial for programmatic requests.
+    headers['ngrok-skip-browser-warning'] = 'true';
     // Temporary diagnostic — visible via `adb logcat | grep flutter` so we can
     // confirm in the field whether the bearer is actually being attached.
     // Remove once the install + auth flow is verified stable.

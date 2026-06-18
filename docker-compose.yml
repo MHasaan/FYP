@@ -149,6 +149,21 @@ services:
       backend:
         condition: service_healthy
 
+  # ============================================
+  # ngrok Tunnel (public HTTPS access)
+  # ============================================
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: fyp-ngrok
+    restart: unless-stopped
+    command: http frontend:80 --domain=${NGROK_DOMAIN} --log=stdout
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    depends_on:
+      - frontend
+
 volumes:
   postgres_data:
   redis_data:

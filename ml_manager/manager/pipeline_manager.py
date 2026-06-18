@@ -35,6 +35,7 @@ from manager.workers.patch_extraction_worker import PatchExtractionWorker
 from manager.workers.global_patch_worker import GlobalPatchWorker
 from manager.workers.kinematics_worker import KinematicsWorker
 from manager.workers.fall_detection_worker import FallDetectionWorker
+from manager.workers.seizure_detection_worker import SeizureDetectionWorker
 
 
 @dataclass
@@ -57,10 +58,12 @@ class PipelineInstance:
     # Available worker factories
     WORKER_FACTORIES: dict[str, Callable[[], BaseWorker]] = {
         "pose": lambda: PoseWorker(),
-        "patch_extraction": lambda: PatchExtractionWorker(),
+        "patch_extraction": lambda: PatchExtractionWorker(indices_name="fall"),
+        "patch_extraction_seizure": lambda: PatchExtractionWorker(indices_name="seizure"),
         "global_patch": lambda: GlobalPatchWorker(),
         "kinematics": lambda: KinematicsWorker(),
         "fall_detection": lambda: FallDetectionWorker(),
+        "seizure_detection": lambda: SeizureDetectionWorker(),
         "test": lambda: TestWorker(),
     }
 
@@ -68,9 +71,11 @@ class PipelineInstance:
     DEPENDENCIES = {
         "pose": [],
         "patch_extraction": ["pose"],
+        "patch_extraction_seizure": ["pose"],
         "global_patch": ["pose"],
         "kinematics": ["pose"],
         "fall_detection": ["pose", "patch_extraction", "global_patch", "kinematics"],
+        "seizure_detection": ["pose", "kinematics", "patch_extraction_seizure"],
         "test": [],
     }
 
@@ -78,9 +83,11 @@ class PipelineInstance:
     INPUT_KEYS = {
         "pose": ["frame"],
         "patch_extraction": ["frame", "pose"],
+        "patch_extraction_seizure": ["frame", "pose"],
         "global_patch": ["frame", "pose"],
         "kinematics": ["pose"],
         "fall_detection": ["frame", "pose", "patches", "global_patch", "kinematic_features"],
+        "seizure_detection": ["frame", "pose", "kinematic_features", "kinematic_ready", "patches_seizure"],
         "test": ["frame"],
     }
 

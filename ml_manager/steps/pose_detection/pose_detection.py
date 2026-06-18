@@ -6,57 +6,235 @@ import time
 from collections import deque
 from scipy.spatial.distance import euclidean
 import json
+import os
 import onnxruntime as ort
+
+# onnxruntime-gpu ships its CUDA/cuDNN libs as separate pip packages (nvidia-*-cu12) whose
+# DLLs live in site-packages\nvidia\*\bin. On Windows the CUDA EP is *listed* but silently
+# falls back to CPU at session creation unless those DLLs are on the loader path.
+# ort.preload_dlls() (onnxruntime>=1.21) loads them correctly; no-op/ignored otherwise.
+try:
+    if hasattr(ort, "preload_dlls"):
+        ort.preload_dlls()
+except Exception:
+    pass
+
+
+def _ensure_tensorrt_dlls():
+    """Make the standard-TensorRT runtime DLLs (nvinfer_10.dll etc.) loadable so the
+    onnxruntime TensorrtExecutionProvider can initialize. preload_dlls() does NOT cover
+    TensorRT; the `tensorrt` pip package ships the libs in site-packages\\tensorrt_libs\\.
+    Importing tensorrt registers that dir, and we also prepend it to PATH (ORT's provider
+    loader resolves nvinfer via PATH). No-op off Windows / if tensorrt isn't installed."""
+    if os.name != "nt":
+        return
+    try:
+        import tensorrt  # noqa: F401  (its __init__ adds tensorrt_libs to the DLL search)
+    except Exception:
+        pass
+    try:
+        import glob
+        site = os.path.dirname(os.path.dirname(ort.__file__))
+        for d in glob.glob(os.path.join(site, "tensorrt_libs")):
+            if os.path.isdir(d):
+                if hasattr(os, "add_dll_directory"):
+                    try:
+                        os.add_dll_directory(d)
+                    except Exception:
+                        pass
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+    except Exception:
+        pass
+
+
 from rtmlib import Body
 
 class RTMPoseDetector:
     """RTMPose detector wrapper with consistent interface"""
     
-    def __init__(self):
-        # Check CUDA availability
+    # Person DETECTOR = YOLOX-tiny (fast; only supplies the bounding box).
+    # Pose/KEYPOINT model = RTMPose-x — the SAME model the seizure detector was trained on.
+    # Swapping only the detector (not the pose model) makes pose ~1.8x faster while keeping
+    # keypoint quality essentially unchanged. (To revert to max accuracy, set both to the
+    # 'performance' yolox_x; for max speed this tiny detector is the right call.)
+    _DET_YOLOX_TINY = ("https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/"
+                       "onnx_sdk/yolox_tiny_8xb8-300e_humanart-6f3252f9.zip")
+    _POSE_RTMPOSE_X = ("https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/"
+                       "onnx_sdk/rtmpose-x_simcc-body7_pt-body7_700e-384x288-71d7b7e9_20230629.zip")
+
+    def __init__(self, provider='cuda', detect_every_n=1, select_patient=True,
+                 patient_lock_ema=0.3, patient_prox_weight=0.3, patient_prox_scale=250.0):
+        """
+        provider: 'cuda' (default) or 'tensorrt'. TensorRT runs the SAME models with no accuracy
+                  change, usually faster; it builds an engine on first run (slow first start),
+                  then caches it in ./trt_cache for fast subsequent starts.
+        detect_every_n: run the YOLOX detector every N frames and reuse its bounding box in
+                  between, while RTMPose runs EVERY frame. N=1 = detect every frame (default,
+                  most accurate). N>=2 is faster; a slightly stale box is usually fine because
+                  the whole-body box barely moves frame-to-frame.
+        select_patient: when multiple people are detected (e.g. caregivers leaning in during a
+                  seizure), don't blindly take detection #0 -- lock onto the patient and follow
+                  them. The lock initializes on the largest person (the patient lies across the
+                  bed and is alone at the start of the clip) and then each frame picks the person
+                  whose centroid is nearest the locked patient, so a caregiver entering frame
+                  can't hijack the keypoints. Set False to restore the old "first person" behavior.
+        patient_lock_ema: EMA factor for updating the locked patient centroid each frame
+                  (0..1, higher = follows the current detection faster). A small value keeps the
+                  lock stable so a single bad/overlapping frame can't steal it onto a caregiver.
+        patient_prox_weight / patient_prox_scale: strength (LAMBDA) and distance falloff (D, in
+                  standardized pixels) of the proximity tiebreak in _select_patient_index.
+                  Selection is area-dominant; proximity only nudges the choice between similarly
+                  sized detections. Larger weight / smaller scale = stickier to the lock.
+        """
         print("Available ONNX Runtime Providers:")
-        print(ort.get_available_providers())
-        
-        # Initialize RTMPose
+        avail = ort.get_available_providers()
+        print(avail)
+        self.detect_every_n = max(1, int(detect_every_n))
+        self._frame_idx = 0
+        self._cached_bboxes = None
+        # Patient-selection state (see _select_patient_index).
+        self.select_patient = bool(select_patient)
+        self.patient_lock_ema = float(patient_lock_ema)
+        self.patient_prox_weight = float(patient_prox_weight)
+        self.patient_prox_scale = float(patient_prox_scale)
+        self._patient_centroid = None  # last known (x, y) of the locked patient
+
+        if provider == 'tensorrt' and 'TensorrtExecutionProvider' in avail:
+            _ensure_tensorrt_dlls()   # put nvinfer_10.dll on the loader path (Windows)
+            from rtmlib.tools.base import RTMLIB_SETTINGS
+            cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trt_cache')
+            os.makedirs(cache_dir, exist_ok=True)
+            RTMLIB_SETTINGS['onnxruntime']['tensorrt'] = ('TensorrtExecutionProvider', {
+                'trt_engine_cache_enable': True,
+                'trt_engine_cache_path': cache_dir,
+                'trt_fp16_enable': True,
+            })
+            device = 'tensorrt'
+        elif 'CUDAExecutionProvider' in avail:
+            device = 'cuda'
+        else:
+            device = 'cpu'
+
+        def _make(dev):
+            return Body(det=self._DET_YOLOX_TINY, det_input_size=(416, 416),
+                        pose=self._POSE_RTMPOSE_X, pose_input_size=(288, 384),
+                        backend='onnxruntime', device=dev)
+
         try:
-            self.body = Body(
-                mode='performance',     # RTMPose-m (75.8 AP)
-                backend='onnxruntime',
-                device='cuda' if 'CUDAExecutionProvider' in ort.get_available_providers() else 'cpu'
-            )
-            device_used = 'GPU' if 'CUDAExecutionProvider' in ort.get_available_providers() else 'CPU'
-            print(f"RTMLib Body model initialized successfully on {device_used}.")
+            self.body = _make(device)
+            print(f"RTMLib Body (YOLOX-tiny + RTMPose-x) on {device.upper()}, "
+                  f"detect_every_n={self.detect_every_n}.")
         except Exception as e:
-            print(f"Failed to initialize RTMPose with GPU, falling back to CPU: {e}")
-            self.body = Body(
-                mode='performance',
-                backend='onnxruntime', 
-                device='cpu'
-            )
-            print("RTMLib Body model initialized on CPU.")
-    
+            fb = 'cuda' if 'CUDAExecutionProvider' in avail else 'cpu'
+            print(f"Init on {device} failed ({e}); falling back to {fb}.")
+            try:
+                self.body = _make(fb)
+            except Exception:
+                self.body = _make('cpu')
+
+    def _infer(self, frame):
+        """Detector every detect_every_n frames (reuse bbox); pose model every frame."""
+        if self.detect_every_n <= 1:
+            return self.body(frame)
+        if self._cached_bboxes is None or (self._frame_idx % self.detect_every_n == 0):
+            self._cached_bboxes = self.body.det_model(frame)
+        self._frame_idx += 1
+        return self.body.pose_model(frame, bboxes=self._cached_bboxes)
+
+    @staticmethod
+    def _person_centroid_and_area(kpts17, conf17, min_conf=0.3):
+        """Centroid (x, y) and bbox area of one person, from keypoints confident enough to
+        trust. Falls back to all keypoints if none clear the threshold (very low-quality
+        detection). Returns (centroid, area) with centroid=None if unusable."""
+        kpts17 = np.asarray(kpts17, dtype=np.float32)
+        conf17 = np.asarray(conf17, dtype=np.float32).reshape(-1)
+        mask = conf17 > min_conf
+        pts = kpts17[mask] if np.any(mask) else kpts17
+        if pts.shape[0] == 0:
+            return None, 0.0
+        centroid = pts.mean(axis=0)
+        wh = pts.max(axis=0) - pts.min(axis=0)
+        area = float(wh[0] * wh[1])
+        return centroid, area
+
+    def _select_patient_index(self, keypoints_list, scores_list):
+        """Pick which detected person is the patient and follow them across frames.
+
+        The patient is the dominant foreground subject: lying across the bed, closest to the
+        camera, and the largest detection in nearly every frame, while caregivers who lean in
+        are smaller / partially occluded. So we score primarily by bbox AREA and use proximity
+        to the locked patient only as a tiebreaker:
+
+            score_i = area_i / max_area  +  LAMBDA * exp(-dist_to_lock_i / D)
+
+        Area dominates (a distractor must be ~>70% of the patient's size AND closer to the lock
+        to win), so a caregiver stepping into frame can't hijack the keypoints. Crucially, area
+        is recomputed fresh every frame, so a single bad frame self-corrects -- unlike pure
+        centroid tracking, which drifts onto a distractor and sticks. The lock centroid is an
+        EMA of the chosen person, used only for the soft proximity tiebreak."""
+        n = len(keypoints_list)
+        centroids, areas = [], []
+        for i in range(n):
+            c, a = self._person_centroid_and_area(keypoints_list[i], scores_list[i])
+            centroids.append(c)
+            areas.append(a)
+
+        valid = [i for i in range(n) if centroids[i] is not None]
+        if not valid:
+            return 0  # nothing usable; caller still handles it gracefully
+
+        max_area = max(areas[i] for i in valid) or 1.0
+        LAMBDA = self.patient_prox_weight
+        D = self.patient_prox_scale
+
+        def score(i):
+            s = areas[i] / max_area
+            if self._patient_centroid is not None:
+                dist = float(np.linalg.norm(centroids[i] - self._patient_centroid))
+                s += LAMBDA * float(np.exp(-dist / D))
+            return s
+
+        idx = max(valid, key=score)
+
+        # Update the lock toward the chosen centroid (EMA keeps the tiebreak stable).
+        a = self.patient_lock_ema
+        if self._patient_centroid is None:
+            self._patient_centroid = centroids[idx].copy()
+        else:
+            self._patient_centroid = (1 - a) * self._patient_centroid + a * centroids[idx]
+        return idx
+
     def detect_poses(self, frame):
         """
         Detect poses and return in OpenPose-compatible format
         Returns: keypoints_18x3, confidences_18
         """
         # Get RTMPose detections (17 keypoints + confidence scores)
-        keypoints_list, scores_list = self.body(frame)
-        
+        keypoints_list, scores_list = self._infer(frame)
+
         # If no person detected, return zeros
         # Handle case where keypoints_list might be a numpy array
-        if (keypoints_list is None or 
+        if (keypoints_list is None or
             (hasattr(keypoints_list, '__len__') and len(keypoints_list) == 0) or
             (hasattr(keypoints_list, 'size') and keypoints_list.size == 0)):
             return np.zeros((18, 2), dtype=np.float32), np.zeros(18, dtype=np.float32)
-        
-        # Take the first person (highest confidence)
-        kpts17 = keypoints_list[0]  # Shape: (17, 2)
-        conf17 = scores_list[0]     # Shape: (17,)
-        
+
+        # Pick the patient. With one person this is just index 0; with several (caregivers
+        # leaning in during a seizure) it locks onto the patient instead of detection #0.
+        if self.select_patient and len(keypoints_list) > 1:
+            idx = self._select_patient_index(keypoints_list, scores_list)
+        else:
+            idx = 0
+            if self.select_patient:
+                # Keep the lock warm even on single-person frames so tracking is ready
+                # the moment a second person appears.
+                self._select_patient_index(keypoints_list, scores_list)
+        kpts17 = keypoints_list[idx]  # Shape: (17, 2)
+        conf17 = scores_list[idx]     # Shape: (17,)
+
         # Convert to OpenPose 18-keypoint format
         kpts18, conf18 = self._convert_to_openpose_format(kpts17, conf17)
-        
+
         return kpts18, conf18
     
     def _convert_to_openpose_format(self, kpts17, conf17):
@@ -396,17 +574,57 @@ class SmartEstimator:
         
         return None, 0.0
 
-def detect_pose_with_intelligent_tracking(rtm_detector, frame, tracker, confidence_threshold=0.25):
+# Max centroid move (standardized px) before the temporal smoother treats it as an identity
+# switch and drops stale history (see detect_pose_with_intelligent_tracking). The patient is
+# near-stationary in bed, so a large jump means selection switched people.
+IDENTITY_JUMP_PX = 100.0
+
+
+def _confident_centroid(points, confidences, threshold):
+    """Centroid of the keypoints above `threshold` (None if too few). Used to detect when the
+    selected person changed identity between frames."""
+    pts = np.asarray(points, dtype=np.float32)
+    conf = np.asarray(confidences, dtype=np.float32).reshape(-1)
+    m = conf > threshold
+    if int(m.sum()) < 3:
+        return None
+    return pts[m].mean(axis=0)
+
+
+def detect_pose_with_intelligent_tracking(rtm_detector, frame, tracker, confidence_threshold=0.25,
+                                          preprocess=True):
     """
     Intelligent pose detection that prioritizes accuracy over completeness using RTMPose
+
+    preprocess: apply intelligent_preprocessing (CLAHE + bilateral) before detection. On dark
+        EMU footage this CLAHE step can ERASE the (striped-pyjama) patient from the YOLOX
+        detector during a seizure while leaving caregivers detectable, which then hijacks the
+        keypoints. Set False to detect on the raw standardized frame, where the patient is found
+        reliably as the dominant subject. Must be kept consistent between training and deploy.
     """
-    
+
     # Enhanced preprocessing for better raw detection
-    frame_processed = intelligent_preprocessing(frame)
-    
+    frame_processed = intelligent_preprocessing(frame) if preprocess else frame
+
     # Use RTMPose for detection instead of OpenPose
     raw_points, raw_confidences = rtm_detector.detect_poses(frame_processed)
-    
+
+    # Identity guard (multi-person clips). detect_poses now picks the PATIENT among several
+    # people, so the selected pose can legitimately jump frame-to-frame when the patient is
+    # briefly occluded and selection lands on a caregiver, then recovers. The single-person
+    # temporal smoother below would blend those two identities and smear the keypoints onto
+    # whoever is in the (now stale) history. If the freshly selected pose is far from the last
+    # reliable pose, drop the history so we emit the patient's own pose instead of a blend.
+    _cur_cen = _confident_centroid(raw_points, raw_confidences, confidence_threshold)
+    if len(tracker.reliable_pose_history) > 0:
+        _prev_cen = _confident_centroid(tracker.reliable_pose_history[-1],
+                                        tracker.reliable_confidence_history[-1],
+                                        confidence_threshold)
+        if (_cur_cen is not None and _prev_cen is not None and
+                float(np.linalg.norm(_cur_cen - _prev_cen)) > IDENTITY_JUMP_PX):
+            tracker.reliable_pose_history.clear()
+            tracker.reliable_confidence_history.clear()
+
     # Update detection stability tracking
     update_detection_stability(tracker, raw_points, raw_confidences, confidence_threshold)
     

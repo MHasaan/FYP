@@ -18,15 +18,19 @@ class PatchExtractionWorker(BaseWorker):
     """
     Patch extraction worker that produces local body-part patches.
 
+    Supports two keypoint orderings via `indices_name`:
+      - "fall"    → FALL_INDICES, outputs keys: patches / valid_mask / patch_quality
+      - "seizure" → SEIZURE_INDICES, outputs keys: patches_seizure / valid_mask_seizure / patch_quality_seizure
+
     Input: {"frame": np.ndarray, "pose": pose_data_dict}
-    Output: {"patches": np.ndarray (15, 32, 32, 3),
-             "valid_mask": np.ndarray (15,),
-             "patch_quality": dict}
     """
 
-    def __init__(self, model_path: Optional[str] = None):
+    def __init__(self, model_path: Optional[str] = None, indices_name: str = "fall"):
         super().__init__(name="patch_extraction", model_path=model_path)
+        self._indices_name = indices_name
+        self._output_prefix = "" if indices_name == "fall" else f"{indices_name}_"
         self._extract_fn = None
+        self._indices_to_keep = None  # set in load_model
         # Default configuration
         self._kernel_size = 128
         self._kernel_sigma = 0.3
@@ -35,14 +39,19 @@ class PatchExtractionWorker(BaseWorker):
 
     def load_model(self):
         """Load the patch extraction function (no model weights needed)."""
-        print(f"🧩 Loading patch extraction module...")
+        print(f"🧩 Loading patch extraction module (indices={self._indices_name})...")
         try:
             from steps.patch_extraction.enhanced_extract_patches import (
                 extract_patches_with_confidence,
+                FALL_INDICES,
+                SEIZURE_INDICES,
             )
             self._extract_fn = extract_patches_with_confidence
+            self._indices_to_keep = (
+                FALL_INDICES if self._indices_name == "fall" else SEIZURE_INDICES
+            )
             self.is_loaded = True
-            print(f"✅ Patch extraction module loaded")
+            print(f"✅ Patch extraction module loaded ({self._indices_name} ordering)")
             print(f"   Kernel size: {self._kernel_size}")
             print(f"   Kernel sigma: {self._kernel_sigma}")
             print(f"   Output scale: {self._scale} ({int(self._kernel_size * self._scale)}px)")
@@ -104,6 +113,7 @@ class PatchExtractionWorker(BaseWorker):
                 scale=self._scale,
                 min_confidence=self._min_confidence,
                 debug=False,
+                indices_to_keep=self._indices_to_keep,
             )
 
             # Extract quality summary
@@ -122,10 +132,11 @@ class PatchExtractionWorker(BaseWorker):
                 "error": str(e),
             }
 
+        prefix = self._output_prefix
         return {
-            "patches": patches,
-            "valid_mask": valid_mask,
-            "patch_quality": patch_quality,
+            f"{prefix}patches":       patches,
+            f"{prefix}valid_mask":    valid_mask,
+            f"{prefix}patch_quality": patch_quality,
         }
 
     def update_config(self, config: dict[str, Any]):

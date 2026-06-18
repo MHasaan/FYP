@@ -17,19 +17,27 @@ import '../../widgets/status_pill.dart';
 
 // Models actually wired in the ML manager (see WORKER_FACTORIES in
 // ml_manager/manager/pipeline_manager.py). Other names are reserved.
-const Set<String> _kWiredModels = {'pose', 'fall_detection', 'test'};
+const Set<String> _kWiredModels = {
+  'pose',
+  'fall_detection',
+  'seizure_detection',
+  'test',
+};
 
 const Map<String, String> _kModelLabels = {
   'pose': 'Pose detection',
   'fall_detection': 'Fall detection',
+  'seizure_detection': 'Seizure detection',
   'test': 'Test (passthrough)',
 };
 
 const Map<String, String> _kModelDescriptions = {
   'pose':
-      '18-point body keypoints. Auto-required when fall detection is on.',
+      '18-point body keypoints. Auto-required when fall or seizure detection is on.',
   'fall_detection':
       'Sliding-window fall classifier driven by pose, patches, and motion.',
+  'seizure_detection':
+      'Sliding-window seizure classifier driven by pose and kinematics.',
   'test':
       'No-op worker — streams frames through with no ML cost. Useful for verifying the pipeline.',
 };
@@ -652,6 +660,7 @@ class _CameraTileState extends State<_CameraTile> {
                 status: _status,
                 latencyMs: _latency,
                 hasError: hasError,
+                results: _results,
               ),
             ),
           ),
@@ -760,12 +769,14 @@ class _PreviewSurface extends StatelessWidget {
   final String status;
   final double latencyMs;
   final bool hasError;
+  final Map<String, dynamic>? results;
 
   const _PreviewSurface({
     required this.frame,
     required this.status,
     required this.latencyMs,
     required this.hasError,
+    this.results,
   });
 
   @override
@@ -880,7 +891,85 @@ class _PreviewSurface extends StatelessWidget {
               ),
             ),
           ),
+        // ── Detection result pills (fall / seizure) ─────────────────
+        if (frame != null) _DetectionOverlay(results: results),
       ],
+    );
+  }
+}
+
+// ── Detection result overlay ─────────────────────────────────────────────
+
+class _DetectionOverlay extends StatelessWidget {
+  final Map<String, dynamic>? results;
+
+  const _DetectionOverlay({this.results});
+
+  @override
+  Widget build(BuildContext context) {
+    final r = results?['results'] as Map?;
+    if (r == null) return const SizedBox.shrink();
+
+    final pills = <Widget>[];
+
+    final fd = r['fall_detection'] as Map?;
+    if (fd != null) {
+      final prob = (fd['probability'] as num?)?.toDouble() ?? 0.0;
+      final isAlert = fd['is_fall'] == true;
+      pills.add(_DetectionPill(label: 'FALL', probability: prob, isAlert: isAlert));
+    }
+
+    final sd = r['seizure_detection'] as Map?;
+    if (sd != null) {
+      final prob = (sd['probability'] as num?)?.toDouble() ?? 0.0;
+      final isAlert = sd['is_seizure'] == true;
+      pills.add(_DetectionPill(label: 'SEIZURE', probability: prob, isAlert: isAlert));
+    }
+
+    if (pills.isEmpty) return const SizedBox.shrink();
+
+    return Positioned(
+      bottom: 8,
+      left: 8,
+      child: Wrap(spacing: 4, children: pills),
+    );
+  }
+}
+
+class _DetectionPill extends StatelessWidget {
+  final String label;
+  final double probability;
+  final bool isAlert;
+
+  const _DetectionPill({
+    required this.label,
+    required this.probability,
+    required this.isAlert,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (probability * 100).toStringAsFixed(0);
+    final Color bg = isAlert
+        ? Colors.red.withValues(alpha: 0.85)
+        : probability >= 0.5
+            ? Colors.orange.withValues(alpha: 0.85)
+            : Colors.black.withValues(alpha: 0.55);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        '$label $pct%',
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 9,
+          letterSpacing: 0.4,
+        ),
+      ),
     );
   }
 }
@@ -1024,6 +1113,8 @@ IconData _modelIcon(String name) {
       return Icons.accessibility_new_rounded;
     case 'fall_detection':
       return AppIcons.fall;
+    case 'seizure_detection':
+      return AppIcons.seizure;
     case 'test':
       return Icons.bug_report_outlined;
   }
@@ -1057,6 +1148,8 @@ class _CameraSettingsSheetState extends State<_CameraSettingsSheet> {
   late Set<String> _models;
   late double _fallThreshold;
   late double _alertThreshold;
+  late double _seizureThreshold;
+  late double _seizureAlertThreshold;
   late double _poseConfidence;
   late Set<String> _initialModels;
 
@@ -1075,10 +1168,13 @@ class _CameraSettingsSheetState extends State<_CameraSettingsSheet> {
         (widget.instance['model_configs'] as Map?)?.cast<String, dynamic>() ??
             {};
     final fall = (mc['fall_detection'] as Map?)?.cast<String, dynamic>() ?? {};
+    final seizure = (mc['seizure_detection'] as Map?)?.cast<String, dynamic>() ?? {};
     final pose = (mc['pose'] as Map?)?.cast<String, dynamic>() ?? {};
 
     _fallThreshold = ((fall['threshold'] as num?) ?? 0.5).toDouble();
     _alertThreshold = ((fall['alert_threshold'] as num?) ?? 0.75).toDouble();
+    _seizureThreshold = ((seizure['threshold'] as num?) ?? 0.5).toDouble();
+    _seizureAlertThreshold = ((seizure['alert_threshold'] as num?) ?? 0.75).toDouble();
     _poseConfidence =
         ((pose['confidence_threshold'] as num?) ?? 0.25).toDouble();
   }
@@ -1087,13 +1183,18 @@ class _CameraSettingsSheetState extends State<_CameraSettingsSheet> {
     setState(() {
       if (on) {
         _models.add(name);
-        // Fall detection auto-requires pose. Patches/global/kinematics get
+        // Both detection models require pose. Patches/global/kinematics get
         // auto-expanded server-side, so no need to surface them here.
-        if (name == 'fall_detection') _models.add('pose');
+        if (name == 'fall_detection' || name == 'seizure_detection') {
+          _models.add('pose');
+        }
       } else {
         _models.remove(name);
-        // If pose is removed, fall detection can't run either.
-        if (name == 'pose') _models.remove('fall_detection');
+        // If pose is removed, neither detection model can run.
+        if (name == 'pose') {
+          _models.remove('fall_detection');
+          _models.remove('seizure_detection');
+        }
       }
     });
   }
@@ -1108,6 +1209,12 @@ class _CameraSettingsSheetState extends State<_CameraSettingsSheet> {
       configs['fall_detection'] = {
         'threshold': _fallThreshold,
         'alert_threshold': _alertThreshold,
+      };
+    }
+    if (_models.contains('seizure_detection')) {
+      configs['seizure_detection'] = {
+        'threshold': _seizureThreshold,
+        'alert_threshold': _seizureAlertThreshold,
       };
     }
     Navigator.pop(
@@ -1229,6 +1336,30 @@ class _CameraSettingsSheetState extends State<_CameraSettingsSheet> {
                   max: 0.99,
                   divisions: 17,
                   onChanged: (v) => setState(() => _alertThreshold = v),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // ── Seizure detection tuning ───────────────────────────
+              if (_models.contains('seizure_detection')) ...[
+                Text('Seizure detection', style: _sectionStyle(theme)),
+                const SizedBox(height: 4),
+                _SliderRow(
+                  label: 'Seizure threshold',
+                  value: _seizureThreshold,
+                  min: 0.10,
+                  max: 0.95,
+                  divisions: 17,
+                  onChanged: (v) => setState(() => _seizureThreshold = v),
+                ),
+                const SizedBox(height: 6),
+                _SliderRow(
+                  label: 'High-confidence alert',
+                  value: _seizureAlertThreshold,
+                  min: 0.10,
+                  max: 0.99,
+                  divisions: 17,
+                  onChanged: (v) => setState(() => _seizureAlertThreshold = v),
                 ),
                 const SizedBox(height: 12),
               ],
