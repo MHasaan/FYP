@@ -1,0 +1,6 @@
+[     863ms] [LOG] [ApiService] setAuthToken -> set=false len=0 @ http://localhost/main.dart.js:34642
+[     934ms] [LOG] [ApiService] _buildHeaders -> hasAuth=false tokenLen=0 @ http://localhost/main.dart.js:34642
+[    1082ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:8000/api/auth/users:0
+[  144512ms] [LOG] [ApiService] setAuthToken -> set=false len=0 @ http://localhost/main.dart.js:34642
+[  144553ms] [LOG] [ApiService] _buildHeaders -> hasAuth=false tokenLen=0 @ http://localhost/main.dart.js:34642
+[  144677ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:8000/api/auth/users:0

@@ -990,6 +990,31 @@ class ApiService {
     return _handleJsonResponse(response);
   }
 
+  /// Submit a Visual Search job that captures a live frame from a configured
+  /// camera. The ML manager opens the camera, grabs one frame, and runs
+  /// GroundingDINO on it. Returns the new job row (status='queued').
+  Future<Map<String, dynamic>> submitGroundingDinoLiveFrameJob({
+    required int cameraConfigId,
+    required String prompt,
+    String? name,
+    double boxThreshold = 0.35,
+    double textThreshold = 0.25,
+  }) async {
+    final uri = Uri.parse('${AppConfig.groundingDinoBaseUrl}/detect/live-frame/');
+    final response = await _client.post(
+      uri,
+      headers: _buildHeaders(json: true),
+      body: jsonEncode({
+        'camera_config_id': cameraConfigId,
+        'prompt': prompt,
+        if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+        'box_threshold': boxThreshold,
+        'text_threshold': textThreshold,
+      }),
+    );
+    return _handleJsonResponse(response);
+  }
+
   /// List the current user's Visual Search jobs (most recent first).
   Future<Map<String, dynamic>> listGroundingDinoJobs({
     int limit = 50,

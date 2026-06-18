@@ -11,9 +11,8 @@ import '../../widgets/eldercare_card.dart';
 import '../../widgets/section_header.dart';
 
 /// Form for kicking off a new Visual Search (GroundingDINO) job.
-/// Picks an image OR a short video, takes a natural-language prompt, and
-/// optional thresholds. On submit, uploads to the backend and pops back
-/// with the created job row so the parent can navigate to results.
+/// Picks an image, short video, or a live camera frame. On submit,
+/// uploads (or triggers frame capture) and pops back with the new job row.
 class NewVisualSearchScreen extends StatefulWidget {
   const NewVisualSearchScreen({super.key});
 
@@ -21,7 +20,7 @@ class NewVisualSearchScreen extends StatefulWidget {
   State<NewVisualSearchScreen> createState() => _NewVisualSearchScreenState();
 }
 
-enum _InputKind { image, video }
+enum _InputKind { image, video, liveCamera }
 
 enum _Stage { idle, picking, uploading, done, error }
 
@@ -42,11 +41,40 @@ class _NewVisualSearchScreenState extends State<NewVisualSearchScreen> {
   int _totalBytes = 0;
   String? _error;
 
+  // Live camera state
+  List<Map<String, dynamic>> _cameras = [];
+  int? _selectedCameraId;
+  bool _loadingCameras = false;
+
+  @override
+  void initState() {
+    super.initState();
+  }
+
   @override
   void dispose() {
     _promptCtrl.dispose();
     _nameCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadCameras() async {
+    if (_cameras.isNotEmpty || _loadingCameras) return;
+    setState(() => _loadingCameras = true);
+    try {
+      final list = await _api.getCameraConfigs();
+      if (mounted) {
+        setState(() {
+          _cameras = list.cast<Map<String, dynamic>>();
+          if (_cameras.isNotEmpty && _selectedCameraId == null) {
+            _selectedCameraId = _cameras.first['id'] as int;
+          }
+          _loadingCameras = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _loadingCameras = false);
+    }
   }
 
   Future<void> _pickFile() async {
@@ -83,15 +111,49 @@ class _NewVisualSearchScreenState extends State<NewVisualSearchScreen> {
 
   Future<void> _submit() async {
     final prompt = _promptCtrl.text.trim();
-    if (_picked == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pick a file first')),
-      );
-      return;
-    }
     if (prompt.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Enter a text prompt')),
+      );
+      return;
+    }
+
+    if (_kind == _InputKind.liveCamera) {
+      if (_selectedCameraId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Select a camera first')),
+        );
+        return;
+      }
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _stage = _Stage.uploading;
+        _error = null;
+      });
+      try {
+        final job = await _api.submitGroundingDinoLiveFrameJob(
+          cameraConfigId: _selectedCameraId!,
+          prompt: prompt,
+          name: _nameCtrl.text.trim().isEmpty ? null : _nameCtrl.text.trim(),
+          boxThreshold: _boxThreshold,
+          textThreshold: _textThreshold,
+        );
+        if (!mounted) return;
+        HapticFeedback.heavyImpact();
+        Navigator.pop(context, job);
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _stage = _Stage.error;
+          _error = e is ApiException ? 'HTTP ${e.statusCode}: ${e.message}' : e.toString();
+        });
+      }
+      return;
+    }
+
+    if (_picked == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pick a file first')),
       );
       return;
     }
@@ -150,7 +212,7 @@ class _NewVisualSearchScreenState extends State<NewVisualSearchScreen> {
             const SectionHeader(
               title: 'Find anything with a description',
               subtitle:
-                  'Pick a file and describe what to look for. Separate phrases with periods, e.g. "person . wheelchair . walker ."',
+                  'Upload a file or capture a live camera frame. Describe what to look for — separate phrases with periods, e.g. "person . wheelchair . walker ."',
               icon: AppIcons.visualSearch,
             ),
 
@@ -172,21 +234,36 @@ class _NewVisualSearchScreenState extends State<NewVisualSearchScreen> {
                         label: Text('Video'),
                         icon: Icon(Icons.movie_creation_rounded),
                       ),
+                      ButtonSegment(
+                        value: _InputKind.liveCamera,
+                        label: Text('Live Camera'),
+                        icon: Icon(Icons.videocam_rounded),
+                      ),
                     ],
                     selected: {_kind},
                     onSelectionChanged: _busy
                         ? null
                         : (set) {
+                            final next = set.first;
                             setState(() {
-                              _kind = set.first;
+                              _kind = next;
                               _picked = null;
                             });
+                            if (next == _InputKind.liveCamera) _loadCameras();
                           },
                   ),
                   const SizedBox(height: 16),
 
-                  // File picker / picked file
-                  if (_picked == null)
+                  // File picker / camera selector
+                  if (_kind == _InputKind.liveCamera)
+                    _CameraPickerCard(
+                      cameras: _cameras,
+                      selectedId: _selectedCameraId,
+                      loading: _loadingCameras,
+                      enabled: !_busy,
+                      onChanged: (id) => setState(() => _selectedCameraId = id),
+                    )
+                  else if (_picked == null)
                     _PickerCard(
                       kind: _kind,
                       onTap: _pickFile,
@@ -299,11 +376,14 @@ class _NewVisualSearchScreenState extends State<NewVisualSearchScreen> {
 
                   if (_stage == _Stage.uploading) ...[
                     const SizedBox(height: 16),
-                    _ProgressCard(
-                      sentBytes: _sentBytes,
-                      totalBytes: _totalBytes,
-                      progress: _uploadProgress,
-                    ),
+                    if (_kind == _InputKind.liveCamera)
+                      _CapturingCard()
+                    else
+                      _ProgressCard(
+                        sentBytes: _sentBytes,
+                        totalBytes: _totalBytes,
+                        progress: _uploadProgress,
+                      ),
                   ],
 
                   if (_stage == _Stage.error && _error != null) ...[
@@ -338,8 +418,21 @@ class _NewVisualSearchScreenState extends State<NewVisualSearchScreen> {
                     height: 54,
                     child: FilledButton.icon(
                       onPressed: _busy ? null : _submit,
-                      icon: const Icon(Icons.search_rounded, size: 22),
-                      label: Text(_busy ? 'Uploading…' : 'Run visual search'),
+                      icon: Icon(
+                        _kind == _InputKind.liveCamera
+                            ? Icons.camera_alt_rounded
+                            : Icons.search_rounded,
+                        size: 22,
+                      ),
+                      label: Text(
+                        _busy
+                            ? (_kind == _InputKind.liveCamera
+                                ? 'Capturing frame…'
+                                : 'Uploading…')
+                            : (_kind == _InputKind.liveCamera
+                                ? 'Capture & search'
+                                : 'Run visual search'),
+                      ),
                       style: FilledButton.styleFrom(
                         backgroundColor: AppTheme.brandTeal,
                       ),
@@ -393,6 +486,115 @@ class _ThresholdRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _CameraPickerCard extends StatelessWidget {
+  final List<Map<String, dynamic>> cameras;
+  final int? selectedId;
+  final bool loading;
+  final bool enabled;
+  final ValueChanged<int?> onChanged;
+
+  const _CameraPickerCard({
+    required this.cameras,
+    required this.selectedId,
+    required this.loading,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  String _sourceLabel(Map<String, dynamic> cam) {
+    final type = (cam['source_type'] as String? ?? '').replaceAll('_', ' ');
+    final url = cam['source_url'] as String? ?? '';
+    final short = url.length > 30 ? '${url.substring(0, 27)}…' : url;
+    return '$type · $short';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return EldercareCard(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.videocam_rounded, color: AppTheme.brandTeal, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Select camera',
+                style: GoogleFonts.outfit(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurfaceVariant,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (loading)
+            const Center(
+              child: SizedBox(
+                height: 24,
+                width: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: AppTheme.brandTeal,
+                ),
+              ),
+            )
+          else if (cameras.isEmpty)
+            Text(
+              'No cameras configured. Add a camera in the Cameras tab first.',
+              style: GoogleFonts.dmSans(fontSize: 13, color: cs.onSurfaceVariant),
+            )
+          else
+            DropdownButtonFormField<int>(
+              value: selectedId,
+              isExpanded: true,
+              decoration: const InputDecoration(isDense: true),
+              items: cameras.map((cam) {
+                final id = cam['id'] as int;
+                final name = cam['name'] as String? ?? 'Camera $id';
+                return DropdownMenuItem<int>(
+                  value: id,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        name,
+                        style: GoogleFonts.outfit(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        _sourceLabel(cam),
+                        style: GoogleFonts.dmSans(
+                          fontSize: 11,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+              onChanged: enabled ? onChanged : null,
+            ),
+          const SizedBox(height: 10),
+          Text(
+            'A single frame will be captured from this source at the moment you tap "Capture & search".',
+            style: GoogleFonts.dmSans(fontSize: 11.5, color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -514,6 +716,35 @@ class _PickedFileCard extends StatelessWidget {
               tooltip: 'Remove',
               onPressed: onRemove,
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CapturingCard extends StatelessWidget {
+  const _CapturingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return EldercareCard(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 18, height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2.5, color: AppTheme.brandTeal),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            'Queuing frame capture…',
+            style: GoogleFonts.outfit(
+              fontWeight: FontWeight.w700,
+              fontSize: 14.5,
+              color: cs.onSurface,
+            ),
+          ),
         ],
       ),
     );

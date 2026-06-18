@@ -21,11 +21,13 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import GroundingDinoJob, UserAccount
+from app.models import CameraConfig, GroundingDinoJob, UserAccount
+from app.routes.camera import _scoped_camera_query
 from app.schemas import GroundingDinoJobResponse, GroundingDinoJobListResponse
 from app.services.auth_service import get_current_user
 from app.services.redis_service import get_redis_client
@@ -46,6 +48,14 @@ MAX_IMAGE_BYTES = 25 * 1024 * 1024   # 25 MB
 MAX_VIDEO_BYTES = 200 * 1024 * 1024  # 200 MB
 
 REQUESTS_CHANNEL = "grounding_dino:requests"
+
+
+class LiveFrameRequest(BaseModel):
+    camera_config_id: int
+    prompt: str
+    name: str | None = None
+    box_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    text_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
 
 
 async def _store_upload(file: UploadFile, allowed: set[str], max_bytes: int) -> tuple[Path, str, str]:
@@ -105,7 +115,7 @@ def _normalize_prompt(prompt: str) -> str:
     return text
 
 
-async def _publish_job(job: GroundingDinoJob):
+async def _publish_job(job: GroundingDinoJob, extra: dict | None = None):
     """Send the job to the ML manager via Redis."""
     redis = await get_redis_client()
     payload = {
@@ -117,6 +127,8 @@ async def _publish_job(job: GroundingDinoJob):
         "text_threshold": job.text_threshold,
         "output_dir": str(OUTPUT_DIR),
     }
+    if extra:
+        payload.update(extra)
     await redis.publish(REQUESTS_CHANNEL, json.dumps(payload))
 
 
@@ -189,6 +201,52 @@ async def detect_video(
     await db.refresh(job)
 
     await _publish_job(job)
+    return job
+
+
+@router.post("/detect/live-frame", response_model=GroundingDinoJobResponse, status_code=status.HTTP_202_ACCEPTED, include_in_schema=False)
+@router.post("/detect/live-frame/", response_model=GroundingDinoJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def detect_live_frame(
+    body: LiveFrameRequest,
+    user: UserAccount = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Capture a single frame from a configured camera and run GroundingDINO on it.
+
+    The frame capture happens inside the ML manager (which has OpenCV and
+    camera access). Returns the job immediately (status='queued'); poll
+    GET /jobs/{id} until completed or failed.
+    """
+    body.box_threshold, body.text_threshold = _validate_thresholds(
+        body.box_threshold, body.text_threshold
+    )
+    prompt = _normalize_prompt(body.prompt)
+
+    cam_result = await db.execute(
+        _scoped_camera_query(user).where(CameraConfig.id == body.camera_config_id)
+    )
+    camera = cam_result.scalar_one_or_none()
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera config not found")
+
+    source_url = camera.source_url
+
+    job = GroundingDinoJob(
+        user_id=user.id,
+        name=(body.name or "").strip() or f"Live: {camera.name}",
+        input_type="live_frame",
+        input_path=source_url,
+        input_original_filename=f"live_camera_{camera.id}",
+        prompt=prompt,
+        box_threshold=body.box_threshold,
+        text_threshold=body.text_threshold,
+        status="queued",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    await _publish_job(job, extra={"source_url": source_url})
     return job
 
 

@@ -52,202 +52,281 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
   Widget build(BuildContext context) {
     final size = MediaQuery.of(context).size;
     final cs = Theme.of(context).colorScheme;
+    // ≥900px → desktop/tablet split layout; below → mobile vertical layout.
+    final isWide = size.width >= 900;
 
     return Scaffold(
-      body: Stack(
-        children: [
-          // ── Gradient background ────────────────────────────────────────────
-          Positioned.fill(
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0xFF01949A),
-                    Color(0xFF3D8D7A),
-                    Color(0xFF2F7268),
-                  ],
-                  stops: [0.0, 0.55, 1.0],
+      // Force the body to fill the whole window. Without an explicit size the
+      // Stack sizes to its intrinsic (form) width on web, collapsing the whole
+      // screen into a narrow left strip with empty space on the right.
+      body: SizedBox(
+        width: size.width,
+        height: size.height,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // ── Gradient background (full-bleed) ───────────────────────────
+            Positioned.fill(
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0xFF01949A),
+                      Color(0xFF3D8D7A),
+                      Color(0xFF2F7268),
+                    ],
+                    stops: [0.0, 0.55, 1.0],
+                  ),
                 ),
               ),
             ),
+
+            // ── Organic background blobs ─────────────────────────────────────
+            const Positioned.fill(child: _BlobBackground()),
+
+            // ── Content ──────────────────────────────────────────────────────
+            isWide
+                ? _buildWideLayout(context, cs, size)
+                : _buildNarrowLayout(context, cs, size),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Mobile: branding hero on top, sliding form card below.
+  Widget _buildNarrowLayout(BuildContext context, ColorScheme cs, Size size) {
+    return Column(
+      children: [
+        Expanded(
+          flex: 5,
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(32, 24, 32, 0),
+              child: _heroContent(),
+            ),
           ),
+        ),
+        Expanded(
+          flex: 7,
+          child: _formCard(
+            context,
+            cs,
+            size,
+            showHandle: true,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+            shadowOffset: const Offset(0, -8),
+            centerVertically: false,
+          ),
+        ),
+      ],
+    );
+  }
 
-          // ── Organic background blobs ───────────────────────────────────────
-          const Positioned.fill(child: _BlobBackground()),
+  // Desktop / tablet: branding on the left of the gradient, a full-height
+  // form panel pinned to the right.
+  Widget _buildWideLayout(BuildContext context, ColorScheme cs, Size size) {
+    return Row(
+      children: [
+        Expanded(
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 72),
+              child: Center(child: _heroContent()),
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 480,
+          child: _formCard(
+            context,
+            cs,
+            size,
+            showHandle: false,
+            borderRadius: const BorderRadius.horizontal(left: Radius.circular(32)),
+            shadowOffset: const Offset(-8, 0),
+            centerVertically: true,
+          ),
+        ),
+      ],
+    );
+  }
 
-          // ── Content ────────────────────────────────────────────────────────
-          Column(
-            children: [
-              // Top hero section
-              Expanded(
-                flex: 5,
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(32, 24, 32, 0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const AppLogo(size: 44, showWordmark: false)
-                            .animate()
-                            .scale(begin: const Offset(0.5, 0.5), duration: 600.ms, curve: Curves.easeOutBack)
-                            .fade(duration: 400.ms),
+  // ── Branding hero content (shared by both layouts) ─────────────────────────
+  Widget _heroContent() {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppLogo(size: 44, showWordmark: false)
+            .animate()
+            .scale(begin: const Offset(0.5, 0.5), duration: 600.ms, curve: Curves.easeOutBack)
+            .fade(duration: 400.ms),
 
-                        const SizedBox(height: 24),
+        const SizedBox(height: 24),
 
-                        Text(
-                          'Eldercare',
-                          style: GoogleFonts.cormorantGaramond(
-                            fontSize: 48,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                            height: 1.0,
-                          ),
-                        )
-                            .animate(delay: 150.ms)
-                            .slideX(begin: -0.15, duration: 500.ms, curve: Curves.easeOutCubic)
-                            .fade(duration: 400.ms),
+        Text(
+          'Eldercare',
+          style: GoogleFonts.cormorantGaramond(
+            fontSize: 48,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+            height: 1.0,
+          ),
+        )
+            .animate(delay: 150.ms)
+            .slideX(begin: -0.15, duration: 500.ms, curve: Curves.easeOutCubic)
+            .fade(duration: 400.ms),
 
-                        const SizedBox(height: 8),
+        const SizedBox(height: 8),
 
-                        Text(
-                          'Calm, attentive monitoring\nfor those who matter most.',
-                          style: GoogleFonts.dmSans(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w400,
-                            color: Colors.white.withValues(alpha: 0.72),
-                            height: 1.55,
-                          ),
-                        )
-                            .animate(delay: 280.ms)
-                            .slideX(begin: -0.12, duration: 500.ms, curve: Curves.easeOutCubic)
-                            .fade(duration: 400.ms),
+        Text(
+          'Calm, attentive monitoring\nfor those who matter most.',
+          style: GoogleFonts.dmSans(
+            fontSize: 15,
+            fontWeight: FontWeight.w400,
+            color: Colors.white.withValues(alpha: 0.72),
+            height: 1.55,
+          ),
+        )
+            .animate(delay: 280.ms)
+            .slideX(begin: -0.12, duration: 500.ms, curve: Curves.easeOutCubic)
+            .fade(duration: 400.ms),
 
-                        const SizedBox(height: 14),
+        const SizedBox(height: 14),
 
-                        // Build tag — temporary diagnostic so we can visually
-                        // confirm which APK build is installed on the phone.
-                        // Remove once installs are stable.
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(999),
-                            border: Border.all(color: Colors.white.withValues(alpha: 0.30)),
-                          ),
-                          child: Text(
-                            'BUILD 1.1.0+4',
-                            style: GoogleFonts.outfit(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                              letterSpacing: 1.2,
-                            ),
-                          ),
-                        ).animate(delay: 350.ms).fade(duration: 400.ms),
-                      ],
-                    ),
-                  ),
+        // Build tag — temporary diagnostic so we can visually confirm which
+        // APK build is installed on the phone. Remove once installs are stable.
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.30)),
+          ),
+          child: Text(
+            'BUILD 1.1.0+4',
+            style: GoogleFonts.outfit(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ).animate(delay: 350.ms).fade(duration: 400.ms),
+      ],
+    );
+  }
+
+  // ── Form panel (shared by both layouts) ────────────────────────────────────
+  Widget _formCard(
+    BuildContext context,
+    ColorScheme cs,
+    Size size, {
+    required bool showHandle,
+    required BorderRadius borderRadius,
+    required Offset shadowOffset,
+    required bool centerVertically,
+  }) {
+    final formColumn = ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: 460,
+        minHeight: centerVertically ? 0 : size.height * 0.42,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Drag handle (mobile affordance only)
+          if (showHandle)
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 28),
+                decoration: BoxDecoration(
+                  color: cs.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
+            ),
 
-              // ── Sliding card panel ──────────────────────────────────────────
-              Expanded(
-                flex: 7,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: cs.surface,
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.18),
-                        blurRadius: 40,
-                        offset: const Offset(0, -8),
-                      ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        28, 32, 28,
-                        MediaQuery.of(context).viewInsets.bottom + 28,
-                      ),
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: 460, minHeight: size.height * 0.42),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            // Drag handle
-                            Center(
-                              child: Container(
-                                width: 40,
-                                height: 4,
-                                margin: const EdgeInsets.only(bottom: 28),
-                                decoration: BoxDecoration(
-                                  color: cs.outlineVariant,
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                              ),
-                            ),
+          // Tab bar
+          _StyledTabBar(controller: _tabs)
+              .animate(delay: 350.ms)
+              .slideY(begin: 0.2, duration: 450.ms, curve: Curves.easeOutCubic)
+              .fade(duration: 350.ms),
 
-                            // Tab bar
-                            _StyledTabBar(controller: _tabs)
-                                .animate(delay: 350.ms)
-                                .slideY(begin: 0.2, duration: 450.ms, curve: Curves.easeOutCubic)
-                                .fade(duration: 350.ms),
+          const SizedBox(height: 28),
 
-                            const SizedBox(height: 28),
+          // Forms
+          AnimatedSize(
+            duration: const Duration(milliseconds: 260),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: AnimatedBuilder(
+              animation: _tabs,
+              builder: (context, _) {
+                final form = _tabs.index == 0
+                    ? const _SignInForm()
+                    : _RegisterForm(firstAdminAvailable: _firstAdminAvailable);
+                return KeyedSubtree(
+                  key: ValueKey<int>(_tabs.index),
+                  child: form,
+                );
+              },
+            ),
+          ),
 
-                            // Forms
-                            AnimatedSize(
-                              duration: const Duration(milliseconds: 260),
-                              curve: Curves.easeOutCubic,
-                              alignment: Alignment.topCenter,
-                              child: AnimatedBuilder(
-                                animation: _tabs,
-                                builder: (context, _) {
-                                  final form = _tabs.index == 0
-                                      ? const _SignInForm()
-                                      : _RegisterForm(firstAdminAvailable: _firstAdminAvailable);
-                                  return KeyedSubtree(
-                                    key: ValueKey<int>(_tabs.index),
-                                    child: form,
-                                  );
-                                },
-                              ),
-                            ),
-
-                            const SizedBox(height: 20),
-                            Text(
-                              _checkedFirstAdmin
-                                  ? 'By continuing you agree to use this system responsibly.'
-                                  : 'Connecting to server…',
-                              style: GoogleFonts.dmSans(
-                                fontSize: 11,
-                                color: cs.onSurfaceVariant.withValues(alpha: 0.6),
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                )
-                    .animate(delay: 200.ms)
-                    .slideY(begin: 0.08, duration: 550.ms, curve: Curves.easeOutCubic)
-                    .fade(duration: 400.ms),
-              ),
-            ],
+          const SizedBox(height: 20),
+          Text(
+            _checkedFirstAdmin
+                ? 'By continuing you agree to use this system responsibly.'
+                : 'Connecting to server…',
+            style: GoogleFonts.dmSans(
+              fontSize: 11,
+              color: cs.onSurfaceVariant.withValues(alpha: 0.6),
+            ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
     );
+
+    Widget scroll = SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        28, 32, 28,
+        MediaQuery.of(context).viewInsets.bottom + 28,
+      ),
+      child: formColumn,
+    );
+    // On wide screens the panel is full-height, so vertically centre the
+    // (shorter) form within it. The scroll view still scrolls if it overflows.
+    if (centerVertically) scroll = Center(child: scroll);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: borderRadius,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.18),
+            blurRadius: 40,
+            offset: shadowOffset,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: scroll,
+      ),
+    )
+        .animate(delay: 200.ms)
+        .slideY(begin: 0.08, duration: 550.ms, curve: Curves.easeOutCubic)
+        .fade(duration: 400.ms);
   }
 }
 

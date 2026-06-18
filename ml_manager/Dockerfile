@@ -89,15 +89,14 @@ ARG TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 ENV CUDA_HOME=/usr/local/cuda
 
-# Clone GroundingDINO from upstream at a pinned commit. Doing this inside
-# the build (instead of COPY-ing from the host) means a fresh-clone PC
-# can build the image without first manually cloning IDEA-Research/GroundingDINO.
-# Pinned commit is the same revision the project was developed against.
-ARG GROUNDINGDINO_COMMIT=856dde20aee659246248e20734ef9ba5214f5e44
-RUN git clone https://github.com/IDEA-Research/GroundingDINO.git ./GroundingDINO && \
-    cd ./GroundingDINO && \
-    git checkout ${GROUNDINGDINO_COMMIT} && \
-    rm -rf .git
+# GroundingDINO source now lives in-repo (absorbed into the build context at
+# the repo root). COPY it instead of cloning from GitHub:
+#   - No network fetch on every build — fully offline/deterministic.
+#   - Cached as a normal layer keyed on the source file contents, which rarely
+#     change, so the expensive CUDA-op compile below stays cached across rebuilds.
+# (Previously this `git clone`d IDEA-Research/GroundingDINO@856dde2 at build
+# time, which re-downloaded each time its layer cache was invalidated.)
+COPY GroundingDINO/ ./GroundingDINO/
 
 # --no-build-isolation: GroundingDINO's setup.py imports torch at build time.
 # PEP 517 build isolation hides our installed torch from the build venv,

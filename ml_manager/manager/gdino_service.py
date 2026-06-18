@@ -108,15 +108,19 @@ class GDinoService:
 
         input_type = request.get("input_type")
         input_path = request.get("input_path")
+        source_url = request.get("source_url") or input_path
         prompt = request.get("prompt", "")
         box_threshold = float(request.get("box_threshold", 0.35))
         text_threshold = float(request.get("text_threshold", 0.25))
         output_dir = Path(request.get("output_dir") or "/videos/gdino_outputs")
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if not input_path or not Path(input_path).exists():
-            self._publish_failure(job_id, f"Input file not found: {input_path}")
-            return
+        # For file-based inputs validate the path exists; live_frame reads
+        # directly from the camera source so no local file is expected.
+        if input_type != "live_frame":
+            if not input_path or not Path(input_path).exists():
+                self._publish_failure(job_id, f"Input file not found: {input_path}")
+                return
 
         self._publish_status(job_id, "running")
 
@@ -135,6 +139,15 @@ class GDinoService:
                 result = self._process_video(
                     job_id=job_id,
                     input_path=input_path,
+                    prompt=prompt,
+                    box_threshold=box_threshold,
+                    text_threshold=text_threshold,
+                    output_dir=output_dir,
+                )
+            elif input_type == "live_frame":
+                result = self._capture_and_process_live_frame(
+                    job_id=job_id,
+                    source_url=source_url,
                     prompt=prompt,
                     box_threshold=box_threshold,
                     text_threshold=text_threshold,
@@ -266,6 +279,80 @@ class GDinoService:
             "output_video_path": str(out_path),
         }
 
+    # ── live frame capture ────────────────────────────────────────────────
+    def _capture_and_process_live_frame(
+        self,
+        job_id: int,
+        source_url: str,
+        prompt: str,
+        box_threshold: float,
+        text_threshold: float,
+        output_dir: Path,
+    ) -> dict:
+        """Capture a single frame from any OpenCV-compatible source (USB camera,
+        RTSP stream, HTTP stream, or video file) and run GroundingDINO on it.
+
+        Tries up to 5 reads so USB cameras that need a warm-up cycle still
+        return a valid frame. The capture is released immediately after the
+        frame is obtained to avoid holding the device open.
+        """
+        # Normalise the source: numeric strings become int device indices.
+        try:
+            cam_source: Any = int(source_url)
+            is_usb = True
+        except (ValueError, TypeError):
+            cam_source = source_url
+            is_usb = False
+
+        cap = cv2.VideoCapture(cam_source)
+        if not cap.isOpened():
+            raise RuntimeError(f"Could not open camera source: {source_url}")
+
+        # For USB cameras, push resolution as high as possible before reading.
+        # OpenCV clamps to the device's native maximum, so asking for a huge
+        # value is safe — we just get whatever the hardware supports.
+        # RTSP/HTTP streams have a fixed server-side resolution; no-op there.
+        if is_usb:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 10000)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 10000)
+
+        frame = None
+        for _ in range(5):
+            ok, f = cap.read()
+            if ok and f is not None:
+                frame = f
+                break
+
+        cap.release()
+
+        if frame is None:
+            raise RuntimeError(f"Failed to read a frame from: {source_url}")
+
+        # Save the raw captured frame so we have an original to attach to the job.
+        INPUT_DIR = Path("/videos/gdino_inputs")
+        INPUT_DIR.mkdir(parents=True, exist_ok=True)
+        saved_input = INPUT_DIR / f"job_{job_id}_live.jpg"
+        cv2.imwrite(str(saved_input), frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+
+        h, w = frame.shape[:2]
+
+        if USE_STUB or not self._ensure_model():
+            detections = self._stub_detections(prompt, w, h)
+        else:
+            detections = self._real_image_inference(
+                frame, prompt, box_threshold, text_threshold
+            )
+
+        annotated = self._draw_detections(frame.copy(), detections)
+        out_path = output_dir / f"job_{job_id}_{uuid.uuid4().hex[:8]}.jpg"
+        cv2.imwrite(str(out_path), annotated, [cv2.IMWRITE_JPEG_QUALITY, 88])
+
+        return {
+            "detections": detections,
+            "summary": self._summarize(detections),
+            "output_image_path": str(out_path),
+        }
+
     # ── inference backends ────────────────────────────────────────────────
     def _ensure_model(self) -> bool:
         """Lazy-load the real GroundingDINO model. Returns True on success.
@@ -308,10 +395,11 @@ class GDinoService:
         text_threshold: float,
     ) -> list[dict]:
         """Real inference path. Only reached when USE_STUB is False and the
-        model loaded successfully."""
-        from manager.gdino_loader import run_gdino_inference
+        model loaded successfully. Uses tiled inference for maximum recall on
+        small and distant objects."""
+        from manager.gdino_loader import run_gdino_inference_tiled
 
-        return run_gdino_inference(
+        return run_gdino_inference_tiled(
             model=self._model,
             bgr_image=bgr_image,
             prompt=prompt,

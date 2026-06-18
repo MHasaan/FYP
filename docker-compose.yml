@@ -71,9 +71,9 @@ services:
   # ============================================
   ml_manager:
     build:
-      # Context is the repo root so the Dockerfile can COPY the ml_manager
-      # tree. GroundingDINO is cloned from upstream inside the Dockerfile,
-      # so no GroundingDINO/ directory is needed in the build context.
+      # Context is the repo root so the Dockerfile can COPY both the
+      # ml_manager tree and the in-repo GroundingDINO/ source (no build-time
+      # git clone — see ml_manager/Dockerfile).
       context: .
       dockerfile: ml_manager/Dockerfile
       args:
@@ -92,6 +92,19 @@ services:
       # 1 if you want the stub for local UI testing without the real
       # model loaded. See ml_manager/manager/gdino_loader.py for details.
       - GDINO_USE_STUB=${GDINO_USE_STUB:-0}
+      # GroundingDINO inference resolution. Keep at training values (800/1333).
+      # Going higher collapses confidence scores to near-zero (0 detections).
+      # Small-object recall is handled by tiling below, not by raising these.
+      - GDINO_SHORT_SIDE=${GDINO_SHORT_SIDE:-800}
+      - GDINO_MAX_SIZE=${GDINO_MAX_SIZE:-1333}
+      # Tiled inference: splits each image into a ROWS×COLS grid with OVERLAP
+      # fraction of shared border. Each tile is processed independently so
+      # small/far objects appear larger relative to the model input.
+      # Full image is always processed too for global context.
+      - GDINO_TILE_ROWS=${GDINO_TILE_ROWS:-2}
+      - GDINO_TILE_COLS=${GDINO_TILE_COLS:-2}
+      - GDINO_TILE_OVERLAP=${GDINO_TILE_OVERLAP:-0.25}
+      - GDINO_NMS_IOU=${GDINO_NMS_IOU:-0.5}
     ports:
       - "${ML_MANAGER_PORT:-8001}:8001"
     volumes:

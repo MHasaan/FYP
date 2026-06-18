@@ -153,7 +153,7 @@ class FallDetectionWorker(BaseWorker):
         if self.model_path is None:
             # Default: look relative to ml_manager directory
             base_dir = Path(__file__).resolve().parent.parent.parent
-            self.model_path = str(base_dir / "models" / "EnhancedVSViG_base_best.pth")
+            self.model_path = str(base_dir / "models" / "VSViGFall.pth")
 
         model_path = Path(self.model_path)
         if not model_path.exists():
