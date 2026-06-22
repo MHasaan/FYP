@@ -18,14 +18,10 @@ COPY lib/ ./lib/
 COPY web/ ./web/
 COPY analysis_options.yaml ./
 
-ARG API_BASE_URL=http://localhost:8000
-ARG WS_BASE_URL=ws://localhost:8000
-
-# Build web release (pub cache still mounted for any build-time resolution)
+# Build web release — no --dart-define needed; the app uses relative URLs
+# (same-origin via nginx /api/ proxy) so it works from any host automatically.
 RUN --mount=type=cache,target=/root/.pub-cache \
-    flutter build web --release \
-      --dart-define=API_BASE_URL=${API_BASE_URL} \
-      --dart-define=WS_BASE_URL=${WS_BASE_URL}
+    flutter build web --release
 
 # ============================================
 # Stage 2: Serve with Nginx
